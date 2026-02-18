@@ -20,11 +20,13 @@ Shepherd is a WASM Component Model runtime that replaces CoW Protocol's hardcode
                     │          │            │            │                  │
                     │  ┌───────▼────────────▼────────────▼──────────────┐  │
                     │  │              Host API (WIT)                    │  │
-                    │  │  rpc · cow · state · order · logging            │  │
+                    │  │  rpc · local-store · remote-store · msg · logging  │  │
+                    │  │  cow · order (domain extensions)                  │  │
                     │  └───────┬────────────┬────────────┬──────────────┘  │
                     │          │            │            │                  │
                     │   ┌──────▼──────┐ ┌──▼───┐ ┌──────▼──────┐          │
-                    │   │ alloy (RPC) │ │ redb │ │ CoW API     │          │
+                    │   │ alloy (RPC) │ │ redb │ │ Swarm/Waku  │          │
+                    │   │ CoW API     │ │      │ │             │          │
                     │   └──────┬──────┘ └──────┘ └─────────────┘          │
                     │          │                                            │
                     │  ┌───────▼────────────────────────────────────────┐  │
@@ -64,26 +66,38 @@ Shepherd is a WASM Component Model runtime that replaces CoW Protocol's hardcode
 | Deployment | Docker | — |
 | License | AGPL-3.0 | — |
 
-## WIT World (API Surface)
+## WIT Worlds (API Surface)
 
-The `shepherd-module` world is the single contract between host and guest. Modules import host capabilities and export lifecycle hooks:
+The WIT is split into layered packages. The universal layer (`web3:runtime`) provides blockchain-agnostic capabilities. Domain extensions (e.g. `shepherd:cow`) add protocol-specific interfaces.
 
 ```
-world shepherd-module {
-    import rpc            — generic JSON-RPC passthrough (eth_* and beyond)
-    import cow            — CoW Protocol REST API access
-    import state          — get, set, delete, list_keys
-    import order          — submit
+// Universal layer — any platform, any blockchain app
+package web3:runtime@0.1.0
+
+world headless-module {
+    import rpc            — consensus access (JSON-RPC passthrough)
+    import local-store    — local key-value persistence
+    import remote-store   — decentralised storage (Swarm)
+    import msg            — decentralised messaging (Waku)
     import logging        — log (trace/debug/info/warn/error)
 
     export init(config)   — called once on load
-    export on_event(event)— called per subscribed event (block, logs, timer)
+    export on_event(event)— called per subscribed event (block, logs, timer, message)
+}
+
+// CoW Protocol extension
+package shepherd:cow@0.1.0
+
+world shepherd-module {
+    include headless-module
+    import cow            — CoW Protocol REST API access
+    import order          — submit orders
 }
 ```
 
-No WASI interfaces are imported. All I/O is mediated through these five interfaces. The `rpc` interface exposes a single generic `request` function — the SDK implements alloy's `Transport` trait on top of it, giving modules the full alloy `Provider` API (80+ methods) with zero WIT churn.
+No WASI interfaces are imported. All I/O is mediated through host interfaces. The `rpc` interface exposes a single generic `request` function — the SDK implements alloy's `Transport` trait on top of it, giving modules the full alloy `Provider` API (80+ methods) with zero WIT churn.
 
-> Design rationale: [07-rpc-namespace-design.md](07-rpc-namespace-design.md)
+> Design rationale: [07-rpc-namespace-design.md](07-rpc-namespace-design.md) | Platform generalisation: [08-platform-generalisation.md](08-platform-generalisation.md)
 
 → Full WIT definition: [01-runtime-environment.md](01-runtime-environment.md)
 
@@ -167,23 +181,26 @@ Resolve → Load → Init → Run ⇄ Restart → Dead
 
 → Full design: [04-state-store.md](04-state-store.md)
 
-## SDK (`shepherd-sdk`)
+## SDK (Layered)
 
-The SDK is the only dependency a module author needs:
+The SDK mirrors the WIT layering: `web3-sdk` (universal) and `shepherd-sdk` (CoW extension, re-exports `web3-sdk`).
 
-| Layer | Provides |
-|-------|----------|
-| `#[shepherd::module]` | Proc macro — eliminates WIT/bindgen boilerplate; supports `async fn` for natural `.await` |
-| `provider(chain_id)` | Full alloy `Provider` backed by host RPC (via `HostTransport`) |
-| `CowClient` | Typed CoW Protocol API client backed by host `cow` interface |
-| `prelude::*` | All types, interfaces, helpers in one import |
-| `TypedState` | Serde-based typed state (postcard serialisation) |
-| `abi::sol!` | Compile-time Ethereum ABI codec (alloy-sol-types) |
-| `log::{info!, …}` | Formatted logging macros |
-| `Error` / `Result` | Proper error type with `?` support |
-| `testing::MockHost` | Native-Rust unit tests with mock host |
-| `testing::WasmTestHarness` | Integration tests in real wasmtime |
-| `cargo shepherd` | CLI: new / build / package / publish |
+| Crate | Layer | Provides |
+|-------|-------|----------|
+| `web3-sdk` | `provider(chain_id)` | Full alloy `Provider` backed by host RPC (via `HostTransport`) |
+| | `TypedState` | Serde-based typed local state (postcard serialisation) |
+| | `RemoteStore` | Typed decentralised storage client (upload, download, feeds) |
+| | `MsgClient` | Typed messaging client (publish, query) |
+| | `abi::sol!` | Compile-time Ethereum ABI codec (alloy-sol-types) |
+| | `log::{info!, …}` | Formatted logging macros |
+| | `Error` / `Result` | Proper error type with `?` support |
+| | `#[web3::module]` | Proc macro for universal modules |
+| `shepherd-sdk` | `CowClient` | Typed CoW Protocol API client backed by host `cow` interface |
+| | `#[shepherd::module]` | Proc macro for CoW modules (extends `#[web3::module]`) |
+| | `prelude::*` | All types, interfaces, helpers in one import |
+| Both | `testing::MockHost` | Native-Rust unit tests with mock host |
+| | `testing::WasmTestHarness` | Integration tests in real wasmtime |
+| | `cargo shepherd` | CLI: new / build / package / publish |
 
 Multi-language support: module authors can use Rust, C/C++, Go, JavaScript, or Python — all compile to valid components against the same WIT world.
 
@@ -198,7 +215,7 @@ Multi-language support: module authors can use Rust, C/C++, Go, JavaScript, or P
 | CPU (deterministic) | Fuel | Trap → rollback → restart |
 | CPU (wall-clock) | Epoch interruption | Yield to Tokio |
 | Memory | `ResourceLimiter` | `memory.grow` denied |
-| Storage | Host-side tracking | `state::set` returns `Err` |
+| Storage | Host-side tracking | `local-store::set` returns `Err` |
 
 ### RPC Resilience
 
@@ -216,6 +233,21 @@ Metrics cover three groups: runtime-level (modules loaded/dead), per-module (eve
 
 → Full design: [06-production-hardening.md](06-production-hardening.md)
 
+## Platform Generalisation
+
+The WIT contract is the universal interface — any host that implements it can run modules unchanged. The architecture generalises beyond the server runtime to four platform targets:
+
+| Platform | WASM Engine | State Backend | RPC Backend | Use Case |
+|----------|-------------|---------------|-------------|----------|
+| **Server** (reference) | wasmtime | redb | alloy provider | Headless automation |
+| **Mobile** (Flutter/Dart) | wasmtime C API / wasm3 | SQLite | HTTP client | On-device automation |
+| **WebView** | Browser engine + `jco` | IndexedDB | JS bridge / wallet | Rich web UIs with blockchain access |
+| **Super app** | All of the above | SQLite | HTTP + wallet | Decentralised mini-program platform |
+
+The universal layer is built on five primitives: `rpc` (consensus), `local-store` (local persistence), `remote-store` (decentralised storage via Swarm), `msg` (decentralised messaging via Waku), and `logging`. These form the `web3:runtime` WIT package. Domain extensions like `shepherd:cow` add protocol-specific interfaces. The SDK mirrors this: `web3-sdk` (universal) and `shepherd-sdk` (CoW extension). A module compiled against the universal layer runs on any conforming host.
+
+→ Full design: [08-platform-generalisation.md](08-platform-generalisation.md)
+
 ## Grant Milestones
 
 | # | Milestone | Effort | Key Deliverables |
@@ -231,15 +263,17 @@ Metrics cover three groups: runtime-level (modules loaded/dead), per-module (eve
 ```
 shepherd/
 ├── crates/
-│   ├── runtime/           Core WASM host, event system, state store
-│   ├── sdk/               shepherd-sdk crate for module authors
+│   ├── runtime/           Core WASM host (server), event system, state store
+│   ├── web3-sdk/          Universal Rust SDK (HostTransport, TypedState, SwarmClient)
+│   ├── shepherd-sdk/      CoW Protocol SDK (CowClient, extends web3-sdk)
 │   ├── cli/               shepherd operator CLI (run, module, state)
 │   └── cargo-shepherd/    cargo subcommand for module authors (new, build, package, publish)
 ├── modules/
 │   ├── twap-monitor/      TWAP order monitoring module
 │   └── ethflow-watcher/   Ethflow order monitoring module
 ├── wit/
-│   └── shepherd.wit       Canonical WIT definition (single source of truth; SDK references via path)
+│   ├── web3-runtime/      Universal WIT package (rpc, local-store, remote-store, msg, logging)
+│   └── shepherd-cow/      CoW Protocol WIT package (cow, order, shepherd-module)
 ├── docker/
 │   └── Dockerfile
 └── docs/
@@ -250,5 +284,6 @@ shepherd/
     ├── 04-state-store.md
     ├── 05-sdk-design.md
     ├── 06-production-hardening.md
-    └── 07-rpc-namespace-design.md
+    ├── 07-rpc-namespace-design.md
+    └── 08-platform-generalisation.md
 ```
