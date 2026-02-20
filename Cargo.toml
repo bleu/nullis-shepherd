@@ -1,0 +1,17 @@
+[workspace]
+members = [
+    "crates/nexum-runtime",
+    "modules/example",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+license = "AGPL-3.0"
+repository = "https://github.com/nullisLabs/shepherd"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
