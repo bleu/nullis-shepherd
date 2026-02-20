@@ -20,7 +20,7 @@ Shepherd is a WASM Component Model runtime that replaces CoW Protocol's hardcode
                     │          │            │            │                  │
                     │  ┌───────▼────────────▼────────────▼──────────────┐  │
                     │  │              Host API (WIT)                    │  │
-                    │  │  rpc · local-store · remote-store · msg · logging  │  │
+                    │  │  csn · local-store · remote-store · msg · logging  │  │
                     │  │  cow · order (domain extensions)                  │  │
                     │  └───────┬────────────┬────────────┬──────────────┘  │
                     │          │            │            │                  │
@@ -75,7 +75,7 @@ The WIT is split into layered packages. The universal layer (`web3:runtime`) pro
 package web3:runtime@0.1.0
 
 world headless-module {
-    import rpc            — consensus access (JSON-RPC passthrough)
+    import csn            — consensus access (JSON-RPC passthrough)
     import local-store    — local key-value persistence
     import remote-store   — decentralised storage (Swarm)
     import msg            — decentralised messaging (Waku)
@@ -95,7 +95,7 @@ world shepherd-module {
 }
 ```
 
-No WASI interfaces are imported. All I/O is mediated through host interfaces. The `rpc` interface exposes a single generic `request` function — the SDK implements alloy's `Transport` trait on top of it, giving modules the full alloy `Provider` API (80+ methods) with zero WIT churn.
+No WASI interfaces are imported. All I/O is mediated through host interfaces. The `csn` interface exposes a single generic `request` function — the SDK implements alloy's `Transport` trait on top of it, giving modules the full alloy `Provider` API (80+ methods) with zero WIT churn.
 
 > Design rationale: [07-rpc-namespace-design.md](07-rpc-namespace-design.md) | Platform generalisation: [08-platform-generalisation.md](08-platform-generalisation.md)
 
@@ -244,7 +244,7 @@ The WIT contract is the universal interface — any host that implements it can 
 | **WebView** | Browser engine + `jco` | IndexedDB | JS bridge / wallet | Rich web UIs with blockchain access |
 | **Super app** | All of the above | SQLite | HTTP + wallet | Decentralised mini-program platform |
 
-The universal layer is built on five primitives: `rpc` (consensus), `local-store` (local persistence), `remote-store` (decentralised storage via Swarm), `msg` (decentralised messaging via Waku), and `logging`. These form the `web3:runtime` WIT package. Domain extensions like `shepherd:cow` add protocol-specific interfaces. The SDK mirrors this: `web3-sdk` (universal) and `shepherd-sdk` (CoW extension). A module compiled against the universal layer runs on any conforming host.
+The universal layer is built on five primitives: `csn` (consensus), `local-store` (local persistence), `remote-store` (decentralised storage via Swarm), `msg` (decentralised messaging via Waku), and `logging`. These form the `web3:runtime` WIT package. Domain extensions like `shepherd:cow` add protocol-specific interfaces. The SDK mirrors this: `web3-sdk` (universal) and `shepherd-sdk` (CoW extension). A module compiled against the universal layer runs on any conforming host.
 
 → Full design: [08-platform-generalisation.md](08-platform-generalisation.md)
 
@@ -272,7 +272,7 @@ shepherd/
 │   ├── twap-monitor/      TWAP order monitoring module
 │   └── ethflow-watcher/   Ethflow order monitoring module
 ├── wit/
-│   ├── web3-runtime/      Universal WIT package (rpc, local-store, remote-store, msg, logging)
+│   ├── web3-runtime/      Universal WIT package (csn, local-store, remote-store, msg, logging)
 │   └── shepherd-cow/      CoW Protocol WIT package (cow, order, shepherd-module)
 ├── docker/
 │   └── Dockerfile

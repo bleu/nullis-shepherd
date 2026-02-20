@@ -19,7 +19,7 @@ Before diving into WIT definitions, the universal runtime is built on five primi
 
 | Primitive | Interface | Backed by | Purpose |
 |-----------|-----------|-----------|---------|
-| **Consensus** | `rpc` | JSON-RPC (eth_*) | Read/write blockchain consensus state |
+| **Consensus** | `csn` | JSON-RPC (eth_*) | Read/write blockchain consensus state |
 | **Local Store** | `local-store` | redb / SQLite / IndexedDB | Per-module private persistence on the device |
 | **Remote Store** | `remote-store` | Ethereum Swarm | Decentralised content-addressed storage |
 | **Messaging** | `msg` | Waku | Decentralised pub/sub messaging |
@@ -56,7 +56,7 @@ The current `shepherd-module` world conflates universal blockchain runtime capab
 ├───────────────────────────────────────────────────────────────┤
 │  Layer 1: Universal Runtime Interfaces                        │
 │                                                               │
-│  rpc           — consensus access (JSON-RPC passthrough)      │
+│  csn           — consensus access (JSON-RPC passthrough)      │
 │  local-store   — local key-value persistence                  │
 │  remote-store  — decentralised content-addressed storage      │
 │  msg           — decentralised pub/sub messaging              │
@@ -72,12 +72,12 @@ Each layer builds on the one below via WIT `include`. A module compiled against 
 
 These five interfaces form the universal runtime contract. Any platform — server, mobile, WebView, desktop — can implement them.
 
-### `rpc` — Consensus Access
+### `csn` — Consensus Access
 
 The module's window into blockchain consensus. A single generic function that forwards JSON-RPC requests to the host's provider infrastructure. The host decides *how* to reach the chain — the module only specifies *what* to ask.
 
 ```wit
-interface rpc {
+interface csn {
     type chain-id = u64;
 
     record json-rpc-error {
@@ -102,14 +102,14 @@ interface rpc {
 
 **Platform implementations:**
 
-| Platform | `rpc::request` backed by |
+| Platform | `csn::request` backed by |
 |----------|--------------------------|
 | Server (Shepherd) | alloy provider with tower middleware (timeout, retry, rate-limit, fallback) |
 | Mobile (Flutter) | HTTP client (reqwest via FFI, or Dart `http` package) to configured RPC endpoint |
 | WebView | JavaScript bridge → `window.ethereum` (injected wallet) or native HTTP via message channel |
 | Super app | Same as mobile, with per-module chain permissions |
 
-The Rust SDK's `HostTransport` (doc 07) works identically on all platforms — it implements alloy's `Transport` trait over `rpc::request`, so module authors get the full alloy `Provider` API regardless of where the module runs.
+The Rust SDK's `HostTransport` (doc 07) works identically on all platforms — it implements alloy's `Transport` trait over `csn::request`, so module authors get the full alloy `Provider` API regardless of where the module runs.
 
 ### `local-store` — Local Key-Value Persistence
 
@@ -364,12 +364,12 @@ interface types {
     type config = list<tuple<string, string>>;
 }
 
-// ... rpc, local-store, remote-store, msg, logging interfaces as above ...
+// ... csn, local-store, remote-store, msg, logging interfaces as above ...
 
 /// Headless module — automation, background processing.
 /// No UI capabilities. Runs on any conforming host.
 world headless-module {
-    import rpc;
+    import csn;
     import local-store;
     import remote-store;
     import msg;
@@ -476,7 +476,7 @@ Host calls on-render → module returns initial UI content
 User interacts → host calls on-interact(element, action, data)
   → module processes interaction
   → module calls ui::render(target, new-content) to update UI
-  → module calls rpc::request to read chain state
+  → module calls csn::request to read chain state
   → module calls local-store::set to persist
 ```
 
@@ -552,7 +552,7 @@ world yield-module {
 }
 ```
 
-The `include` mechanism ensures that any domain-specific module inherits the full universal interface set. A `shepherd-module` can call `rpc::request`, `local-store::get`, `remote-store::upload`, `msg::publish`, and `logging::log` — plus the CoW-specific `cow::request` and `order::submit`.
+The `include` mechanism ensures that any domain-specific module inherits the full universal interface set. A `shepherd-module` can call `csn::request`, `local-store::get`, `remote-store::upload`, `msg::publish`, and `logging::log` — plus the CoW-specific `cow::request` and `order::submit`.
 
 ## Complete WIT Package Layout
 
@@ -560,7 +560,7 @@ The `include` mechanism ensures that any domain-specific module inherits the ful
 wit/
 ├── web3-runtime/
 │   ├── types.wit              # chain-id, block-data, log-entry, message-data, event, config
-│   ├── rpc.wit                # rpc interface (consensus access)
+│   ├── csn.wit                # csn interface (consensus access)
 │   ├── local-store.wit        # local-store interface
 │   ├── remote-store.wit       # remote-store interface (Swarm)
 │   ├── msg.wit                # msg interface (Waku)
@@ -585,7 +585,7 @@ This is the current design (docs 01–07), adapted for the layered WIT:
 
 | Interface | Implementation |
 |-----------|---------------|
-| `rpc` | alloy provider with tower middleware (timeout, retry, rate-limit, fallback) |
+| `csn` | alloy provider with tower middleware (timeout, retry, rate-limit, fallback) |
 | `local-store` | redb (per-module database file, ACID, MVCC, crash-safe) |
 | `remote-store` | Bee API (`http://localhost:1633`) — operator runs a Bee node |
 | `msg` | Waku node (nwaku) via JSON-RPC or REST API |
@@ -619,7 +619,7 @@ A Flutter application embeds a WASM runtime and provides the universal interface
 │  ┌────────▼──────────────▼─────────────────────┐  │
 │  │          Host Adapter (Dart)                │  │
 │  │                                             │  │
-│  │  rpc          → HTTP client to RPC endpoint │  │
+│  │  csn          → HTTP client to RPC endpoint │  │
 │  │  local-store  → SQLite (sqflite)            │  │
 │  │  remote-store → HTTP to Bee gateway         │  │
 │  │  msg          → libwaku via FFI             │  │
@@ -669,7 +669,7 @@ A WebView host runs inside a native app (or standalone browser). The WASM module
 │  │  │  WASM Module (browser's WASM engine)  │  │  │
 │  │  │                                       │  │  │
 │  │  │  Calls imported functions:            │  │  │
-│  │  │    rpc.request(...)                   │  │  │
+│  │  │    csn.request(...)                   │  │  │
 │  │  │    localState.get(...)                │  │  │
 │  │  │    remoteStore.download(...)          │  │  │
 │  │  │    msg.publish(...)                   │  │  │
@@ -680,8 +680,8 @@ A WebView host runs inside a native app (or standalone browser). The WASM module
 │  │  │  JavaScript Bridge (injected)         │  │  │
 │  │  │                                       │  │  │
 │  │  │  window.web3runtime = {               │  │  │
-│  │  │    rpc: { request: (c, m, p) =>       │  │  │
-│  │  │      nativeBridge.call('rpc', ...) }, │  │  │
+│  │  │    csn: { request: (c, m, p) =>       │  │  │
+│  │  │      nativeBridge.call('csn', ...) }, │  │  │
 │  │  │    localState: { get: (k) =>          │  │  │
 │  │  │      nativeBridge.call('state', ..) },│  │  │
 │  │  │    remoteStore: { download: (ref) =>  │  │  │
@@ -697,7 +697,7 @@ A WebView host runs inside a native app (or standalone browser). The WASM module
 │  ┌─────────────────▼────────────────────────────┐  │
 │  │          Native Host Adapter                 │  │
 │  │                                              │  │
-│  │  rpc          → HTTP to RPC / wallet bridge  │  │
+│  │  csn          → HTTP to RPC / wallet bridge  │  │
 │  │  local-store  → SQLite / IndexedDB           │  │
 │  │  remote-store → HTTP to Bee gateway          │  │
 │  │  msg          → Waku node / js-waku          │  │
@@ -718,18 +718,18 @@ Approach 1 is preferred — it preserves the single-artifact property (one `.was
 
 **WebView-specific capability: `window.ethereum`**
 
-In a browser context, the user may have a wallet extension (MetaMask, Rabby, etc.) that injects `window.ethereum`. The `rpc::request` host function can optionally route through this:
+In a browser context, the user may have a wallet extension (MetaMask, Rabby, etc.) that injects `window.ethereum`. The `csn::request` host function can optionally route through this:
 
 ```javascript
 // In the JS bridge
-rpc: {
+csn: {
     request: async (chainId, method, params) => {
         if (window.ethereum && useWalletProvider) {
             // Route through user's wallet (gets signing capabilities too)
             return await window.ethereum.request({ method, params: JSON.parse(params) });
         } else {
             // Route through native bridge to configured RPC endpoint
-            return await nativeBridge.call('rpc', { chainId, method, params });
+            return await nativeBridge.call('csn', { chainId, method, params });
         }
     }
 }
@@ -749,7 +749,7 @@ The super app is the convergence of all targets. A native shell (Flutter) that:
 2. **Fetches modules** from Swarm/IPFS — the same content-addressed distribution.
 3. **Runs headless modules** in an embedded WASM runtime (automation, background tasks).
 4. **Runs interactive modules** in WebViews (UI, dashboards, transaction builders).
-5. **Provides the universal interfaces** to all modules (rpc, local-store, remote-store, msg, logging).
+5. **Provides the universal interfaces** to all modules (csn, local-store, remote-store, msg, logging).
 6. **Provides the UI interface** to interactive modules.
 
 ```
@@ -781,7 +781,7 @@ The super app is the convergence of all targets. A native shell (Flutter) that:
 │  ┌───────▼──────────▼───────────────────────▼────────────┐  │
 │  │                Host Adapter Layer                      │  │
 │  │                                                        │  │
-│  │  rpc          → HTTP to RPC endpoints                  │  │
+│  │  csn          → HTTP to RPC endpoints                  │  │
 │  │  local-store  → SQLite                                 │  │
 │  │  remote-store → Bee light node / gateway               │  │
 │  │  msg          → Waku light client                      │  │
@@ -816,7 +816,7 @@ The super app adds a capability-grant layer on top of the WIT world. When a modu
 
 ```
 "TWAP Monitor" requests:
-  ✓ rpc          — read blockchain state (chains: 42161)
+  ✓ csn          — read blockchain state (chains: 42161)
   ✓ local-store  — store data on your device
   ✓ remote-store — read/write to Swarm network
   ✓ msg          — send/receive messages (topics: /shepherd/1/twap-*)
@@ -835,7 +835,7 @@ Any platform that wants to run modules must implement the **Host Adapter** — t
 
 ### Required Behaviours
 
-**`rpc::request`** (Consensus)
+**`csn::request`** (Consensus)
 - MUST forward the JSON-RPC request to a provider for the given chain.
 - MUST return the JSON-encoded result (the `result` field from the JSON-RPC response).
 - MUST return `json-rpc-error` for provider errors, method-not-found, and transport failures.
@@ -932,13 +932,13 @@ The SDK mirrors the WIT layering:
 │  MsgClient, logging macros,     │
 │  error types,                   │
 │  #[web3::module] macro          │
-│  (imports rpc + local-store     │
+│  (imports csn + local-store     │
 │   + remote-store + msg          │
 │   + logging)                    │
 └─────────────────────────────────┘
 ```
 
-- **`web3-sdk`** — the universal Rust SDK for any module targeting `web3:runtime/headless-module`. Provides `HostTransport` (alloy `Transport` trait over `rpc::request`), `provider(chain_id)`, `TypedState` (serde over `local-store`), `RemoteStore` (typed wrapper over `remote-store`), `MsgClient` (typed wrapper over `msg`), logging macros, error types. Any module author — CoW, DeFi, gaming, whatever — uses this.
+- **`web3-sdk`** — the universal Rust SDK for any module targeting `web3:runtime/headless-module`. Provides `HostTransport` (alloy `Transport` trait over `csn::request`), `provider(chain_id)`, `TypedState` (serde over `local-store`), `RemoteStore` (typed wrapper over `remote-store`), `MsgClient` (typed wrapper over `msg`), logging macros, error types. Any module author — CoW, DeFi, gaming, whatever — uses this.
 
 - **`shepherd-sdk`** — extends `web3-sdk` with CoW-specific wrappers: `CowClient`, order submission helpers, the `#[shepherd::module]` proc macro (which generates `cow` and `order` imports in addition to the universals).
 
@@ -968,7 +968,7 @@ The server runtime (Shepherd) requires two new host implementations: `remote-sto
 
 | Primitive | Interface | Implementation | Persistence | Scope |
 |-----------|-----------|---------------|-------------|-------|
-| Consensus | `rpc` | JSON-RPC (eth_*) | Blockchain | Global (chain) |
+| Consensus | `csn` | JSON-RPC (eth_*) | Blockchain | Global (chain) |
 | Local Store | `local-store` | redb / SQLite / IndexedDB | Device-local | Per-module |
 | Remote Store | `remote-store` | Ethereum Swarm | Decentralised | Global (content-addressed) |
 | Messaging | `msg` | Waku | Ephemeral | Topic-based pub/sub |

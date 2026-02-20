@@ -152,15 +152,15 @@ A restart creates a fresh `Store` (clean WASM memory) but reuses the `InstancePr
 
 ## RPC Resilience
 
-All RPC I/O flows through alloy providers configured by the runtime operator. The `rpc::request` host function (see doc 07) forwards to the provider, which is wrapped with resilience layers using alloy's tower-based middleware.
+All RPC I/O flows through alloy providers configured by the runtime operator. The `csn::request` host function (see doc 07) forwards to the provider, which is wrapped with resilience layers using alloy's tower-based middleware.
 
 ### Provider Stack
 
 ```
-Module calls rpc::request (via alloy Provider in SDK)
+Module calls csn::request (via alloy Provider in SDK)
   │
   ▼
-Host rpc::request impl → alloy Provider
+Host csn::request impl → alloy Provider
   │
   ▼
 ┌──────────────────────────────┐
@@ -194,11 +194,11 @@ Host rpc::request impl → alloy Provider
 chain_id = 42161
 name = "arbitrum"
 
-[[chains.rpc]]
+[[chains.csn]]
 url = "wss://arb-mainnet.g.alchemy.com/v2/KEY"
 priority = 1
 
-[[chains.rpc]]
+[[chains.csn]]
 url = "https://arb1.arbitrum.io/rpc"
 priority = 2       # fallback
 

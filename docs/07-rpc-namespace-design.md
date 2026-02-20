@@ -42,13 +42,13 @@ Module author code
     ▼
 HostTransport (SDK)                     ← implements alloy Transport trait
     │
-    │  rpc::request(chain_id, "eth_blockNumber", "[]")
+    │  csn::request(chain_id, "eth_blockNumber", "[]")
     │
     ▼
 WIT boundary                            ← single generic function
     │
     ▼
-Host rpc::request impl                  ← forwards to alloy provider
+Host csn::request impl                  ← forwards to alloy provider
     │
     │  provider.raw_request_dyn(method, params)
     │
@@ -58,12 +58,12 @@ Alloy provider stack                    ← timeout → retry → rate-limit →
 
 ## Updated WIT Interface
 
-Replace the `blockchain` interface with `rpc`:
+Replace the `blockchain` interface with `csn`:
 
 ```wit
 package shepherd:core@0.1.0;
 
-interface rpc {
+interface csn {
     use types.{chain-id};
 
     /// JSON-RPC error returned by the provider or the host.
@@ -92,7 +92,7 @@ The `types` interface is unchanged. The `state`, `order`, and `logging` interfac
 
 ```wit
 world shepherd-module {
-    import rpc;          // replaces `import blockchain;`
+    import csn;          // replaces `import blockchain;`
     import state;
     import order;
     import logging;
@@ -106,12 +106,12 @@ world shepherd-module {
 
 | Before (per-method) | After (generic) |
 |---|---|
-| `blockchain::eth-call(chain-id, to, data)` | `rpc::request(chain-id, "eth_call", params_json)` |
-| `blockchain::eth-get-logs(filter)` | `rpc::request(chain-id, "eth_getLogs", params_json)` |
-| `blockchain::eth-block-number(chain-id)` | `rpc::request(chain-id, "eth_blockNumber", "[]")` |
-| *n/a — not exposed* | `rpc::request(chain-id, "eth_getBalance", params_json)` |
-| *n/a — not exposed* | `rpc::request(chain-id, "eth_getCode", params_json)` |
-| *n/a — not exposed* | `rpc::request(chain-id, "eth_getStorageAt", params_json)` |
+| `blockchain::eth-call(chain-id, to, data)` | `csn::request(chain-id, "eth_call", params_json)` |
+| `blockchain::eth-get-logs(filter)` | `csn::request(chain-id, "eth_getLogs", params_json)` |
+| `blockchain::eth-block-number(chain-id)` | `csn::request(chain-id, "eth_blockNumber", "[]")` |
+| *n/a — not exposed* | `csn::request(chain-id, "eth_getBalance", params_json)` |
+| *n/a — not exposed* | `csn::request(chain-id, "eth_getCode", params_json)` |
+| *n/a — not exposed* | `csn::request(chain-id, "eth_getStorageAt", params_json)` |
 | *n/a — not exposed* | Any `eth_*` method — no WIT change needed |
 
 ### Why JSON Strings (Not `list<u8>`)
@@ -128,7 +128,7 @@ The host implementation is minimal — one function handles the entire `eth_` na
 ```rust
 use serde_json::value::RawValue;
 
-impl shepherd::core::rpc::Host for ShepherdHostState {
+impl shepherd::core::csn::Host for ShepherdHostState {
     async fn request(
         &mut self,
         chain_id: u64,
@@ -204,17 +204,17 @@ impl ShepherdHostState {
 This could be made configurable per-module via `shepherd.toml`:
 
 ```toml
-[module.rpc]
+[module.csn]
 # Additional methods beyond the default read-only set.
 # Use with caution — write methods can have side-effects.
 extra_allowed_methods = ["eth_createAccessList"]
 ```
 
-The allowlist is runtime-enforced (string matching), not compile-time. This is an acceptable trade-off: the Component Model already provides structural sandboxing (modules can only call `rpc::request`, not arbitrary network I/O), and the allowlist adds defence-in-depth for method-level granularity.
+The allowlist is runtime-enforced (string matching), not compile-time. This is an acceptable trade-off: the Component Model already provides structural sandboxing (modules can only call `csn::request`, not arbitrary network I/O), and the allowlist adds defence-in-depth for method-level granularity.
 
 ## Guest SDK: `HostTransport`
 
-The key SDK addition is a `HostTransport` struct that implements alloy's `Transport` trait by routing through the WIT `rpc::request` host function.
+The key SDK addition is a `HostTransport` struct that implements alloy's `Transport` trait by routing through the WIT `csn::request` host function.
 
 ### Transport Implementation
 
@@ -291,7 +291,7 @@ fn dispatch_single(
     // This calls the WIT-imported host function. Synchronous from the guest's
     // perspective — the host executes the RPC call asynchronously and returns
     // the result when ready.
-    match rpc::request(chain_id, method, params_json) {
+    match csn::request(chain_id, method, params_json) {
         Ok(result_json) => {
             let payload: Box<RawValue> = RawValue::from_string(result_json)
                 .map_err(|e| TransportError::deser_err(e, "host response"))?;
@@ -318,7 +318,7 @@ fn dispatch_single(
 
 ### Why This Works Without Real Async
 
-The `call()` method returns a `Box::pin(async move { ... })` — but the body is entirely synchronous. The `rpc::request` host function blocks from the guest's perspective (the host runs the actual RPC call asynchronously via wasmtime's `func_wrap_async`, but the guest sees a normal function call that returns a value). The future resolves in a single poll.
+The `call()` method returns a `Box::pin(async move { ... })` — but the body is entirely synchronous. The `csn::request` host function blocks from the guest's perspective (the host runs the actual RPC call asynchronously via wasmtime's `func_wrap_async`, but the guest sees a normal function call that returns a value). The future resolves in a single poll.
 
 This means alloy's `Provider` methods — which `await` the transport internally — complete immediately when driven by any executor. The SDK provides a minimal single-threaded executor:
 
@@ -612,7 +612,7 @@ interface cow {
 
 ```wit
 world shepherd-module {
-    import rpc;
+    import csn;
     import cow;       // CoW Protocol API access
     import state;
     import order;     // kept for backwards compat; could merge into cow
@@ -658,7 +658,7 @@ impl shepherd::core::cow::Host for ShepherdHostState {
 
 ### Option B: JSON-RPC Style (Unified)
 
-Route `cow_*` methods through the same `rpc::request` function:
+Route `cow_*` methods through the same `csn::request` function:
 
 ```rust
 // Guest usage:
@@ -684,7 +684,7 @@ async fn request(&mut self, chain_id: u64, method: String, params: String)
 }
 ```
 
-**Option A is recommended.** The CoW API is REST, not JSON-RPC — forcing it into JSON-RPC semantics adds a translation layer on both sides. A separate `cow` interface keeps the contract explicit and makes it clear in the WIT world what capabilities a module has. It also allows independent evolution — the `rpc` interface doesn't need to know about CoW, and vice versa.
+**Option A is recommended.** The CoW API is REST, not JSON-RPC — forcing it into JSON-RPC semantics adds a translation layer on both sides. A separate `cow` interface keeps the contract explicit and makes it clear in the WIT world what capabilities a module has. It also allows independent evolution — the `csn` interface doesn't need to know about CoW, and vice versa.
 
 ### SDK: `CowClient`
 
@@ -800,7 +800,7 @@ All alloy crates with `default-features = false` to avoid pulling in reqwest, to
 ```rust
 // shepherd_sdk::prelude
 pub use crate::bindings::shepherd::core::types::*;
-pub use crate::bindings::shepherd::core::rpc;       // replaces blockchain
+pub use crate::bindings::shepherd::core::csn;       // replaces blockchain
 pub use crate::bindings::shepherd::core::cow;        // new
 pub use crate::bindings::shepherd::core::state;
 pub use crate::bindings::shepherd::core::order;
@@ -887,25 +887,25 @@ The primary trade-off is **type safety at the WIT boundary**: JSON strings vs. s
 2. **Non-Rust guests** (JS, Python, Go) typically work with JSON natively, so JSON strings are actually *more* natural than WIT record types.
 3. **Tracing**: the host can log method + params as structured JSON before forwarding, providing equal or better debuggability.
 
-The compile-time guarantee that a module can only call methods in the WIT is traded for a runtime allowlist. Given that the Component Model already provides structural sandboxing (the module can only call `rpc::request`, not arbitrary network I/O), and the allowlist is enforced at the host boundary before any RPC call is made, this is a sound trade-off.
+The compile-time guarantee that a module can only call methods in the WIT is traded for a runtime allowlist. Given that the Component Model already provides structural sandboxing (the module can only call `csn::request`, not arbitrary network I/O), and the allowlist is enforced at the host boundary before any RPC call is made, this is a sound trade-off.
 
 ## Migration Path
 
 If the current `blockchain` interface has already been implemented:
 
-1. Add `rpc` interface alongside `blockchain` (both in WIT world).
-2. SDK defaults to `rpc`-backed `provider()`. Raw `blockchain::*` functions still work.
+1. Add `csn` interface alongside `blockchain` (both in WIT world).
+2. SDK defaults to `csn`-backed `provider()`. Raw `blockchain::*` functions still work.
 3. Deprecation cycle: mark `blockchain` functions as deprecated in SDK docs.
 4. Remove `blockchain` interface in the next WIT minor version bump.
 
-If starting from scratch (recommended): implement `rpc` only. Skip `blockchain` entirely.
+If starting from scratch (recommended): implement `csn` only. Skip `blockchain` entirely.
 
 ## Summary
 
 | Component | What Changes |
 |---|---|
-| **WIT** | Replace `blockchain` with `rpc` (1 function). Add `cow` interface. |
-| **Host** | One `rpc::request` impl forwarding to `provider.raw_request_dyn`. One `cow::request` impl forwarding to HTTP client. |
+| **WIT** | Replace `blockchain` with `csn` (1 function). Add `cow` interface. |
+| **Host** | One `csn::request` impl forwarding to `provider.raw_request_dyn`. One `cow::request` impl forwarding to HTTP client. |
 | **SDK** | Add `HostTransport` (alloy `Transport` impl), `provider()` constructor, `block_on()`, `CowClient`. |
 | **`#[shepherd::module]` macro** | Named event handlers (`on_block`, `on_logs`, `on_timer`) with generated match dispatch. `async fn` support. Optional `&RootProvider` injection. |
 | **Module author experience** | Full alloy `Provider` API via injected provider. Full CoW API via `CowClient`. No match boilerplate. No `block_on`. No manual ABI wrangling for RPC calls. |

@@ -179,7 +179,7 @@ This means:
 | **Resolve** | Content store resolves `wasm` hash → local path. Fail → `Dead`. |
 | **Load** | `Component::from_file`, create `InstancePre`. Validates that the component satisfies the `shepherd-module` world. Fail → `Dead`. |
 | **Init** | Create `Store`, instantiate, call `init(config)` inside an implicit write transaction (same semantics as `on_event` — commit on success, rollback on failure). Module sets up internal state. Fail → `Restart` (might be transient). |
-| **Run** | Runtime dispatches events to `on_event`. Each call gets a fuel budget. Module processes events and may call host imports (rpc, cow, state, order). |
+| **Run** | Runtime dispatches events to `on_event`. Each call gets a fuel budget. Module processes events and may call host imports (csn, cow, state, order). |
 | **Restart** | After a trap or error. Backoff: 1s → 2s → 4s → … → 5min cap. A fresh `Store` is created (clean memory), but **state store data persists** (it's in redb, external to the WASM instance). |
 | **Dead** | After N consecutive failures (poison pill detection) or explicit operator shutdown. No further event dispatch. Requires manual intervention. |
 
@@ -260,7 +260,7 @@ When an event fires:
 - **Sequential within a module.** Events for the same module are dispatched in order. A module sees block N before block N+1. This is enforced by a per-module dispatch queue (Tokio `mpsc` channel).
 - **Best-effort delivery.** If a module is in Restart state when an event arrives, the event is queued (bounded buffer). If the buffer fills, oldest events are dropped and a warning is logged.
 - **No acknowledgement.** A successful return from `on_event` is not an ack. The module is responsible for using the state store to track its own progress (e.g. "last processed block").
-- **Catch-up after gaps.** Events can be dropped during restart (bounded buffer overflow). Modules should query for missed data on startup — e.g. in `init`, read `last_block` from state, use the alloy `Provider` (backed by `rpc::request`) to call `get_block_number()` and `get_logs()` to backfill any gap. This is a best practice, not enforced by the runtime.
+- **Catch-up after gaps.** Events can be dropped during restart (bounded buffer overflow). Modules should query for missed data on startup — e.g. in `init`, read `last_block` from state, use the alloy `Provider` (backed by `csn::request`) to call `get_block_number()` and `get_logs()` to backfill any gap. This is a best practice, not enforced by the runtime.
 
 ### Event Type Encoding
 
@@ -320,7 +320,7 @@ interface types {
     type config = list<tuple<string, string>>;
 }
 
-interface rpc {
+interface csn {
     use types.{chain-id};
 
     record json-rpc-error {
@@ -372,7 +372,7 @@ interface logging {
 }
 
 world shepherd-module {
-    import rpc;
+    import csn;
     import cow;
     import state;
     import order;
@@ -417,7 +417,7 @@ Operator deploys a module:
    Block 19_000_001 on Arbitrum
    → Router → twap-monitor's dispatch queue
    → Tokio task calls on_event(Event::Block(…))
-   → Module calls rpc::request (via alloy Provider), state_get, order_submit
+   → Module calls csn::request (via alloy Provider), state_get, order_submit
    → Returns Ok(()) — runtime logs success
 
 7. On crash:

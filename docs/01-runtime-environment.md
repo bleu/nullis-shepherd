@@ -134,7 +134,7 @@ interface types {
     type config = list<tuple<string, string>>;
 }
 
-interface rpc {
+interface csn {
     use types.{chain-id};
 
     /// JSON-RPC error returned by the provider or the host.
@@ -205,7 +205,7 @@ interface logging {
 }
 
 world shepherd-module {
-    import rpc;
+    import csn;
     import cow;
     import state;
     import order;
@@ -222,7 +222,7 @@ world shepherd-module {
 Key properties:
 - **No WASI** — modules cannot access FS, network, clocks, or random.
 - **All I/O through our interfaces** — RPC reads, CoW API, state, order submission, logging.
-- **Generic JSON-RPC passthrough** — the `rpc` interface exposes a single `request` function. The SDK implements alloy's `Transport` trait on top of it, giving modules the full alloy `Provider` API. See doc 07 for details.
+- **Generic JSON-RPC passthrough** — the `csn` interface exposes a single `request` function. The SDK implements alloy's `Transport` trait on top of it, giving modules the full alloy `Provider` API. See doc 07 for details.
 - **`list<u8>` for raw bytes** — state values, order payloads, etc. The SDK provides typed wrappers.
 - **Resource types** can be added later (e.g. subscription handles, cursor-based log iteration).
 
@@ -237,7 +237,7 @@ wasmtime::component::bindgen!({
     async: true,
 });
 
-impl shepherd::core::rpc::Host for ShepherdHostState {
+impl shepherd::core::csn::Host for ShepherdHostState {
     async fn request(
         &mut self,
         chain_id: u64,
@@ -275,7 +275,7 @@ impl shepherd::core::state::Host for ShepherdHostState {
 }
 ```
 
-See doc 07 for the full `rpc` and `cow` host implementations, method allowlisting, and the `HostTransport` that bridges this to alloy's `Provider` API on the guest side.
+See doc 07 for the full `csn` and `cow` host implementations, method allowlisting, and the `HostTransport` that bridges this to alloy's `Provider` API on the guest side.
 
 ## Guest-Side (Module Author) Experience
 
