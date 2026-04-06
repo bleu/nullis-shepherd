@@ -2,7 +2,7 @@
 
 ## Motivation
 
-The Shepherd runtime (docs 01–07) is designed as a server-side Rust binary embedding wasmtime. But the core abstractions — WIT-defined host interfaces, content-addressed module distribution, declarative manifests — are not inherently server-specific. The same module binary, the same packaging, and the same distribution mechanism can serve multiple platform targets:
+The Nexum runtime (docs 01-07) is designed as a server-side Rust binary embedding wasmtime. But the core abstractions — WIT-defined host interfaces, content-addressed module distribution, declarative manifests — are not inherently server-specific. The same module binary, the same packaging, and the same distribution mechanism can serve multiple platform targets:
 
 1. **Server runtime** — the current design (Rust/Tokio/wasmtime). Headless automation: blockchain event monitoring, order submission, background computation.
 2. **Mobile app (Flutter/Dart)** — a WASM runtime embedded in a native mobile application via FFI. Modules run on-device, backed by local state (SQLite) and RPC over HTTP.
@@ -39,31 +39,30 @@ Together they cover the full spectrum: persistent truth (consensus), local scrat
 
 The current `shepherd-module` world conflates universal blockchain runtime capabilities with CoW Protocol domain-specific interfaces. To enable reuse across platforms and domains, the WIT is split into layers:
 
-```
-┌───────────────────────────────────────────────────────────────┐
-│  Layer 3: Application-Specific Worlds                         │
-│                                                               │
-│  shepherd:cow     — cow + order (CoW Protocol automation)     │
-│  myapp:defi       — vault + strategy (DeFi yield app)         │
-│  game:engine      — physics + assets (on-chain game)          │
-│                                                               │
-├───────────────────────────────────────────────────────────────┤
-│  Layer 2: Capability Extensions (optional, composable)        │
-│                                                               │
-│  ui          — user interface bridge (interactive modules)     │
-│  signing     — transaction signing (future)                   │
-│                                                               │
-├───────────────────────────────────────────────────────────────┤
-│  Layer 1: Universal Runtime Interfaces                        │
-│                                                               │
-│  csn           — consensus access (JSON-RPC passthrough)      │
-│  local-store   — local key-value persistence                  │
-│  remote-store  — decentralised content-addressed storage      │
-│  msg           — decentralised pub/sub messaging              │
-│  logging       — structured logging                           │
-│                                                               │
-│  Exports: init(config) + on-event(event)                      │
-└───────────────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    subgraph L3["Layer 3: Application-Specific Worlds"]
+        COW["shepherd:cow — cow + order (CoW Protocol automation)"]
+        DEFI["myapp:defi — vault + strategy (DeFi yield app)"]
+        GAME["game:engine — physics + assets (on-chain game)"]
+    end
+
+    subgraph L2["Layer 2: Capability Extensions (optional, composable)"]
+        UI["ui — user interface bridge (interactive modules)"]
+        SIGN["signing — transaction signing (future)"]
+    end
+
+    subgraph L1["Layer 1: Universal Runtime Interfaces"]
+        CSN["csn — consensus access (JSON-RPC passthrough)"]
+        LS["local-store — local key-value persistence"]
+        RS["remote-store — decentralised content-addressed storage"]
+        MSG["msg — decentralised pub/sub messaging"]
+        LOG["logging — structured logging"]
+        EXP["Exports: init(config) + on-event(event)"]
+    end
+
+    L3 -->|"builds on via WIT include"| L2
+    L2 -->|"builds on via WIT include"| L1
 ```
 
 Each layer builds on the one below via WIT `include`. A module compiled against Layer 1 alone runs on any conforming host. A module compiled against Layer 3 (e.g. `shepherd:cow`) requires a host that implements Layers 1 + the CoW extension.
@@ -104,9 +103,9 @@ interface csn {
 
 | Platform | `csn::request` backed by |
 |----------|--------------------------|
-| Server (Shepherd) | alloy provider with tower middleware (timeout, retry, rate-limit, fallback) |
+| Server (Nexum) | alloy provider with tower middleware (timeout, retry, rate-limit, fallback) |
 | Mobile (Flutter) | HTTP client (reqwest via FFI, or Dart `http` package) to configured RPC endpoint |
-| WebView | JavaScript bridge → `window.ethereum` (injected wallet) or native HTTP via message channel |
+| WebView | JavaScript bridge -> `window.ethereum` (injected wallet) or native HTTP via message channel |
 | Super app | Same as mobile, with per-module chain permissions |
 
 The Rust SDK's `HostTransport` (doc 07) works identically on all platforms — it implements alloy's `Transport` trait over `csn::request`, so module authors get the full alloy `Provider` API regardless of where the module runs.
@@ -136,14 +135,14 @@ interface local-store {
 
 | Platform | `local-store` backed by |
 |----------|-------------------------|
-| Server (Shepherd) | redb (per-module database file, ACID, MVCC) |
+| Server (Nexum) | redb (per-module database file, ACID, MVCC) |
 | Mobile (Flutter) | SQLite (per-module table or database, via `sqflite`) |
 | WebView | IndexedDB (per-module object store) or `localStorage` |
 | Super app | SQLite (shared database, per-module namespace isolation) |
 
 The semantics are deliberately minimal — get, set, delete, prefix scan. This is the LCD (lowest common denominator) that every platform can implement efficiently. Advanced features (transactions, MVCC, crash-safety) are host-specific and not exposed in the WIT.
 
-The server runtime's all-or-nothing transactional semantics (doc 04) remain an implementation detail of the Shepherd host, not a guarantee modules can rely on across platforms. Modules that need stronger guarantees should design for idempotency.
+The server runtime's all-or-nothing transactional semantics (doc 04) remain an implementation detail of the Nexum host, not a guarantee modules can rely on across platforms. Modules that need stronger guarantees should design for idempotency.
 
 ### `remote-store` — Decentralised Content-Addressed Storage
 
@@ -175,7 +174,7 @@ interface remote-store {
 
     /// Read the latest value from a mutable feed.
     ///
-    /// Feeds are mutable pointers: (owner, topic) → latest chunk.
+    /// Feeds are mutable pointers: (owner, topic) -> latest chunk.
     /// `owner`: 20-byte Ethereum address of the feed owner.
     /// `topic`: 32-byte topic hash.
     ///
@@ -206,9 +205,9 @@ interface remote-store {
 
 | Platform | `remote-store` backed by |
 |----------|--------------------------|
-| Server (Shepherd) | Direct Bee API (`http://localhost:1633`) |
+| Server (Nexum) | Direct Bee API (`http://localhost:1633`) |
 | Mobile (Flutter) | Bee API via HTTP (local light node or remote gateway) |
-| WebView | JavaScript bridge → native HTTP to Bee gateway |
+| WebView | JavaScript bridge -> native HTTP to Bee gateway |
 | Super app | Embedded Bee light node or gateway proxy |
 
 **Why remote-store as a universal interface:**
@@ -244,7 +243,7 @@ interface msg {
     /// Waku relay (gossipsub) or light push protocol.
     ///
     /// Content topics follow the format: /<app>/<version>/<topic>/<encoding>
-    /// e.g. "/shepherd/1/twap-updates/proto"
+    /// e.g. "/nexum/1/twap-updates/proto"
     publish: func(content-topic: string, payload: list<u8>) -> result<_, msg-error>;
 
     /// Query historical messages from the Waku store protocol.
@@ -266,7 +265,7 @@ interface msg {
 ```toml
 [[subscribe]]
 type = "message"
-content_topic = "/shepherd/1/twap-updates/proto"
+content_topic = "/nexum/1/twap-updates/proto"
 ```
 
 The event variant is extended to include message events:
@@ -293,9 +292,9 @@ This follows the same pattern as all other event sources: sending uses the impor
 
 | Platform | `msg` backed by |
 |----------|-----------------|
-| Server (Shepherd) | Waku node (nwaku or go-waku) via JSON-RPC or REST API |
+| Server (Nexum) | Waku node (nwaku or go-waku) via JSON-RPC or REST API |
 | Mobile (Flutter) | Waku light client via FFI (libwaku) or HTTP to remote Waku node |
-| WebView | JavaScript bridge → native Waku client, or js-waku in-browser |
+| WebView | JavaScript bridge -> native Waku client, or js-waku in-browser |
 | Super app | Embedded Waku light node |
 
 **Why messaging as a universal interface:**
@@ -469,15 +468,17 @@ world app-module {
 
 This creates a bidirectional loop:
 
-```
-Host calls on-render → module returns initial UI content
-  → host displays in WebView/native surface
-
-User interacts → host calls on-interact(element, action, data)
-  → module processes interaction
-  → module calls ui::render(target, new-content) to update UI
-  → module calls csn::request to read chain state
-  → module calls local-store::set to persist
+```mermaid
+flowchart TD
+    A["Host calls on-render"] --> B["Module returns initial UI content"]
+    B --> C["Host displays in WebView/native surface"]
+    C --> D["User interacts"]
+    D --> E["Host calls on-interact(element, action, data)"]
+    E --> F["Module processes interaction"]
+    F --> G["module calls ui::render(target, new-content) to update UI"]
+    F --> H["module calls csn::request to read chain state"]
+    F --> I["module calls local-store::set to persist"]
+    G --> C
 ```
 
 The module's logic runs in the WASM sandbox. The UI runs in the WebView (or native surface). The `ui` interface is the bridge between them. This is analogous to Elm's update loop or React's message-passing model, but across the WASM-host boundary.
@@ -488,7 +489,7 @@ A WebView-based interactive module bundles its web assets alongside the WASM com
 
 ```
 price-dashboard/
-├── shepherd.toml          # manifest (declares world: app-module)
+├── nexum.toml             # manifest (declares world: app-module)
 ├── module.wasm            # compiled WASM component
 └── ui/
     ├── index.html         # entry point (loaded into WebView)
@@ -579,9 +580,9 @@ The `web3-runtime` package is domain-agnostic and reusable. The `shepherd-cow` p
 
 ## Platform Targets
 
-### Server Runtime (Reference Implementation — Shepherd)
+### Server Runtime (Reference Implementation — Nexum)
 
-This is the current design (docs 01–07), adapted for the layered WIT:
+This is the current design (docs 01-07), adapted for the layered WIT. Shepherd is the Nexum distribution with CoW Protocol support.
 
 | Interface | Implementation |
 |-----------|---------------|
@@ -589,52 +590,43 @@ This is the current design (docs 01–07), adapted for the layered WIT:
 | `local-store` | redb (per-module database file, ACID, MVCC, crash-safe) |
 | `remote-store` | Bee API (`http://localhost:1633`) — operator runs a Bee node |
 | `msg` | Waku node (nwaku) via JSON-RPC or REST API |
-| `logging` | `tracing` crate → JSON structured logs |
-| `cow` | reqwest HTTP client → CoW Protocol API |
+| `logging` | `tracing` crate -> JSON structured logs |
+| `cow` | reqwest HTTP client -> CoW Protocol API |
 | `order` | CoW API order submission (permissionless) |
 | Event sources | `eth_subscribe` (blocks, logs), cron (Tokio interval), Waku relay (messages) |
 | WASM engine | wasmtime 41.x (Component Model, fuel, epoch metering) |
 
-The `state` interface is renamed to `local-store`. The `remote-store` and `msg` interfaces are new. Event sources gain a fourth type: `message` (Waku content topic subscriptions). Everything else is as designed.
+The `local-store` interface is renamed from `state`. The `remote-store` and `msg` interfaces are new. Event sources gain a fourth type: `message` (Waku content topic subscriptions). Everything else is as designed.
 
 ### Mobile App (Flutter/Dart)
 
 A Flutter application embeds a WASM runtime and provides the universal interfaces via Dart implementations:
 
-```
-┌──────────────────────────────────────────────────┐
-│              Flutter App                          │
-│                                                   │
-│  ┌─────────────────────────────────────────────┐  │
-│  │          WASM Runtime (via FFI)             │  │
-│  │                                             │  │
-│  │   wasmtime C API  or  wasmer_dart           │  │
-│  │   or  wasm3 (lightweight, C-based)          │  │
-│  │                                             │  │
-│  │   ┌──────────┐  ┌──────────┐               │  │
-│  │   │ Module A │  │ Module B │  (headless)    │  │
-│  │   └────┬─────┘  └────┬─────┘               │  │
-│  └────────┼──────────────┼─────────────────────┘  │
-│           │              │                         │
-│  ┌────────▼──────────────▼─────────────────────┐  │
-│  │          Host Adapter (Dart)                │  │
-│  │                                             │  │
-│  │  csn          → HTTP client to RPC endpoint │  │
-│  │  local-store  → SQLite (sqflite)            │  │
-│  │  remote-store → HTTP to Bee gateway         │  │
-│  │  msg          → libwaku via FFI             │  │
-│  │  logging      → platform logger             │  │
-│  └─────────────────────────────────────────────┘  │
-│                                                   │
-│  ┌─────────────────────────────────────────────┐  │
-│  │          Event Sources (Dart)               │  │
-│  │                                             │  │
-│  │  Block polling (HTTP, no WebSocket on       │  │
-│  │  mobile background), timer via Dart Timer,  │  │
-│  │  Waku subscription via light client,        │  │
-│  │  push notifications (optional)              │  │
-│  └─────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    subgraph FlutterApp["Flutter App"]
+        subgraph WASMRuntime["WASM Runtime (via FFI)"]
+            ENGINE["wasmtime C API or wasmer_dart or wasm3 (lightweight, C-based)"]
+            ModA["Module A (headless)"]
+            ModB["Module B (headless)"]
+        end
+
+        subgraph HostAdapter["Host Adapter (Dart)"]
+            HA_CSN["csn -> HTTP client to RPC endpoint"]
+            HA_LS["local-store -> SQLite (sqflite)"]
+            HA_RS["remote-store -> HTTP to Bee gateway"]
+            HA_MSG["msg -> libwaku via FFI"]
+            HA_LOG["logging -> platform logger"]
+        end
+
+        subgraph EventSources["Event Sources (Dart)"]
+            ES["Block polling (HTTP, no WebSocket on mobile background), timer via Dart Timer, Waku subscription via light client, push notifications (optional)"]
+        end
+
+        ModA --> HostAdapter
+        ModB --> HostAdapter
+        HostAdapter --> EventSources
+    end
 ```
 
 **WASM engine options:**
@@ -658,52 +650,29 @@ For full Component Model support (identical module binaries across server and mo
 
 A WebView host runs inside a native app (or standalone browser). The WASM module executes in the browser's native WASM engine. Host functions are injected via a JavaScript bridge.
 
-```
-┌──────────────────────────────────────────────────┐
-│              Native App Shell                     │
-│                                                   │
-│  ┌─────────────────────────────────────────────┐  │
-│  │              WebView                        │  │
-│  │                                             │  │
-│  │  ┌───────────────────────────────────────┐  │  │
-│  │  │  WASM Module (browser's WASM engine)  │  │  │
-│  │  │                                       │  │  │
-│  │  │  Calls imported functions:            │  │  │
-│  │  │    csn.request(...)                   │  │  │
-│  │  │    localState.get(...)                │  │  │
-│  │  │    remoteStore.download(...)          │  │  │
-│  │  │    msg.publish(...)                   │  │  │
-│  │  │    logging.log(...)                   │  │  │
-│  │  └──────────────┬────────────────────────┘  │  │
-│  │                 │                            │  │
-│  │  ┌──────────────▼────────────────────────┐  │  │
-│  │  │  JavaScript Bridge (injected)         │  │  │
-│  │  │                                       │  │  │
-│  │  │  window.web3runtime = {               │  │  │
-│  │  │    csn: { request: (c, m, p) =>       │  │  │
-│  │  │      nativeBridge.call('csn', ...) }, │  │  │
-│  │  │    localState: { get: (k) =>          │  │  │
-│  │  │      nativeBridge.call('state', ..) },│  │  │
-│  │  │    remoteStore: { download: (ref) =>  │  │  │
-│  │  │      nativeBridge.call('store', ..) },│  │  │
-│  │  │    msg: { publish: (t, p) =>          │  │  │
-│  │  │      nativeBridge.call('msg', ...) }, │  │  │
-│  │  │    logging: { log: (l, m) =>          │  │  │
-│  │  │      console.log(`[${l}] ${m}`) }     │  │  │
-│  │  │  }                                    │  │  │
-│  │  └──────────────┬────────────────────────┘  │  │
-│  └─────────────────┼────────────────────────────┘  │
-│                    │ message channel                │
-│  ┌─────────────────▼────────────────────────────┐  │
-│  │          Native Host Adapter                 │  │
-│  │                                              │  │
-│  │  csn          → HTTP to RPC / wallet bridge  │  │
-│  │  local-store  → SQLite / IndexedDB           │  │
-│  │  remote-store → HTTP to Bee gateway          │  │
-│  │  msg          → Waku node / js-waku          │  │
-│  │  logging      → native logger                │  │
-│  └──────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    subgraph NativeApp["Native App Shell"]
+        subgraph WebView["WebView"]
+            WASMModule["WASM Module (browser's WASM engine)\nCalls imported functions:\ncsn.request(...)\nlocalStore.get(...)\nremoteStore.download(...)\nmsg.publish(...)\nlogging.log(...)"]
+
+            subgraph JSBridge["JavaScript Bridge (injected)"]
+                JS["window.web3runtime = {\n  csn: { request: (c, m, p) =>\n    nativeBridge.call('csn', ...) },\n  localStore: { get: (k) =>\n    nativeBridge.call('store', ..) },\n  remoteStore: { download: (ref) =>\n    nativeBridge.call('store', ..) },\n  msg: { publish: (t, p) =>\n    nativeBridge.call('msg', ...) },\n  logging: { log: (l, m) =>\n    console.log(${`[l] m`}) }\n}"]
+            end
+
+            WASMModule --> JSBridge
+        end
+
+        subgraph NativeHost["Native Host Adapter"]
+            NH_CSN["csn -> HTTP to RPC / wallet bridge"]
+            NH_LS["local-store -> SQLite / IndexedDB"]
+            NH_RS["remote-store -> HTTP to Bee gateway"]
+            NH_MSG["msg -> Waku node / js-waku"]
+            NH_LOG["logging -> native logger"]
+        end
+
+        JSBridge -->|"message channel"| NativeHost
+    end
 ```
 
 **Component Model in the browser:**
@@ -752,60 +721,56 @@ The super app is the convergence of all targets. A native shell (Flutter) that:
 5. **Provides the universal interfaces** to all modules (csn, local-store, remote-store, msg, logging).
 6. **Provides the UI interface** to interactive modules.
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Super App Shell (Flutter)                  │
-│                                                              │
-│  ┌────────────────────────────────────────────────────────┐  │
-│  │                 Module Manager                         │  │
-│  │                                                        │  │
-│  │  Discovery: ENS → Swarm → content store → verify       │  │
-│  │  Lifecycle: Load → Init → Run → Restart → Dead         │  │
-│  │  Permissions: per-module capability grants              │  │
-│  └──────────────┬──────────────────────┬──────────────────┘  │
-│                 │                      │                      │
-│  ┌──────────────▼───────────┐  ┌──────▼──────────────────┐  │
-│  │  Headless WASM Runtime   │  │  WebView Pool           │  │
-│  │                          │  │                          │  │
-│  │  ┌────────┐ ┌────────┐  │  │  ┌────────────────────┐  │  │
-│  │  │ TWAP   │ │ Price  │  │  │  │ Portfolio          │  │  │
-│  │  │ Monitor│ │ Alert  │  │  │  │ Dashboard (HTML)   │  │  │
-│  │  └────┬───┘ └────┬───┘  │  │  └─────────┬──────────┘  │  │
-│  │       │          │       │  │            │             │  │
-│  └───────┼──────────┼───────┘  │  ┌─────────▼──────────┐  │  │
-│          │          │          │  │ DEX Swap            │  │  │
-│          │          │          │  │ Interface (HTML)    │  │  │
-│          │          │          │  └─────────┬──────────┘  │  │
-│          │          │          └────────────┼─────────────┘  │
-│          │          │                       │                │
-│  ┌───────▼──────────▼───────────────────────▼────────────┐  │
-│  │                Host Adapter Layer                      │  │
-│  │                                                        │  │
-│  │  csn          → HTTP to RPC endpoints                  │  │
-│  │  local-store  → SQLite                                 │  │
-│  │  remote-store → Bee light node / gateway               │  │
-│  │  msg          → Waku light client                      │  │
-│  │  logging      → app logger + optional cloud            │  │
-│  │  ui           → WebView bridge (interactive modules)   │  │
-│  └────────────────────────────────────────────────────────┘  │
-│                                                              │
-│  ┌────────────────────────────────────────────────────────┐  │
-│  │                 Shell UI (Flutter)                      │  │
-│  │                                                        │  │
-│  │  Module gallery · Navigation · Settings · Wallet       │  │
-│  └────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    subgraph SuperApp["Super App Shell (Flutter)"]
+        subgraph ModMgr["Module Manager"]
+            DISC["Discovery: ENS -> Swarm -> content store -> verify"]
+            LIFE["Lifecycle: Load -> Init -> Run -> Restart -> Dead"]
+            PERM["Permissions: per-module capability grants"]
+        end
+
+        subgraph HeadlessRT["Headless WASM Runtime"]
+            TWAP["TWAP Monitor"]
+            PRICE["Price Alert"]
+        end
+
+        subgraph WebViewPool["WebView Pool"]
+            PORTFOLIO["Portfolio Dashboard (HTML)"]
+            DEX["DEX Swap Interface (HTML)"]
+        end
+
+        subgraph HostLayer["Host Adapter Layer"]
+            HL_CSN["csn -> HTTP to RPC endpoints"]
+            HL_LS["local-store -> SQLite"]
+            HL_RS["remote-store -> Bee light node / gateway"]
+            HL_MSG["msg -> Waku light client"]
+            HL_LOG["logging -> app logger + optional cloud"]
+            HL_UI["ui -> WebView bridge (interactive modules)"]
+        end
+
+        subgraph ShellUI["Shell UI (Flutter)"]
+            SHELL["Module gallery - Navigation - Settings - Wallet"]
+        end
+
+        ModMgr --> HeadlessRT
+        ModMgr --> WebViewPool
+        TWAP --> HostLayer
+        PRICE --> HostLayer
+        PORTFOLIO --> HostLayer
+        DEX --> HostLayer
+    end
 ```
 
 **What makes this different from Telegram/WeChat mini-programs:**
 
 | Aspect | Telegram/WeChat | Decentralised Super App |
 |--------|-----------------|------------------------|
-| Distribution | Central app store / bot platform | ENS → Swarm/IPFS (no gatekeeper) |
+| Distribution | Central app store / bot platform | ENS -> Swarm/IPFS (no gatekeeper) |
 | Integrity | Trust the platform | Content-addressed (hash-verified) |
 | Execution | JavaScript in WebView (unrestricted) | WASM sandbox (capability-based) |
 | Capabilities | Platform APIs (payments, camera, etc.) | Blockchain-native (consensus, state, messaging) |
-| Updates | Platform-mediated | Author updates ENS → instant propagation |
+| Updates | Platform-mediated | Author updates ENS -> instant propagation |
 | Censorship resistance | Platform can ban apps | ENS + Swarm = no single point of removal |
 | Interoperability | Walled garden | Modules from any author, any domain |
 | Communication | Platform's messaging API | Waku (decentralised, privacy-preserving) |
@@ -819,7 +784,7 @@ The super app adds a capability-grant layer on top of the WIT world. When a modu
   ✓ csn          — read blockchain state (chains: 42161)
   ✓ local-store  — store data on your device
   ✓ remote-store — read/write to Swarm network
-  ✓ msg          — send/receive messages (topics: /shepherd/1/twap-*)
+  ✓ msg          — send/receive messages (topics: /nexum/1/twap-*)
   ✗ ui           — (not requested — headless module)
   ✓ cow          — interact with CoW Protocol API
   ✓ order        — submit orders to CoW Protocol
@@ -895,12 +860,12 @@ The packaging and distribution model (doc 02, 03) is already platform-agnostic:
 ```
 Module author:
   1. Build WASM component
-  2. Create manifest (shepherd.toml)
-  3. Upload bundle to Swarm → get content hash
-  4. Set ENS contenthash → content hash
+  2. Create manifest (nexum.toml)
+  3. Upload bundle to Swarm -> get content hash
+  4. Set ENS contenthash -> content hash
 
 Any host (server, mobile, WebView):
-  1. Resolve ENS name → contenthash
+  1. Resolve ENS name -> contenthash
   2. Fetch bundle from Swarm (or IPFS/OCI/HTTP gateway)
   3. Verify sha256(module.wasm) matches manifest
   4. Load module
@@ -917,25 +882,17 @@ The content hash is the trust anchor. The transport is interchangeable.
 
 The SDK mirrors the WIT layering:
 
-```
-┌─────────────────────────────────┐
-│  shepherd-sdk                   │  Domain-specific (CoW Protocol)
-│                                 │
-│  CowClient, order helpers,     │
-│  #[shepherd::module] macro      │
-│  (imports cow + order)          │
-├─────────────────────────────────┤
-│  web3-sdk                       │  Universal (any blockchain app)
-│                                 │
-│  HostTransport, provider(),     │
-│  TypedState, RemoteStore,       │
-│  MsgClient, logging macros,     │
-│  error types,                   │
-│  #[web3::module] macro          │
-│  (imports csn + local-store     │
-│   + remote-store + msg          │
-│   + logging)                    │
-└─────────────────────────────────┘
+```mermaid
+graph TD
+    subgraph ShepherdSDK["shepherd-sdk (Domain-specific: CoW Protocol)"]
+        COW_ITEMS["CowClient, order helpers,\n#[shepherd::module] macro\n(imports cow + order)"]
+    end
+
+    subgraph Web3SDK["web3-sdk (Universal: any blockchain app)"]
+        WEB3_ITEMS["HostTransport, provider(),\nTypedState, RemoteStore,\nMsgClient, logging macros,\nerror types,\n#[web3::module] macro\n(imports csn + local-store\n+ remote-store + msg\n+ logging)"]
+    end
+
+    ShepherdSDK -->|"extends"| Web3SDK
 ```
 
 - **`web3-sdk`** — the universal Rust SDK for any module targeting `web3:runtime/headless-module`. Provides `HostTransport` (alloy `Transport` trait over `csn::request`), `provider(chain_id)`, `TypedState` (serde over `local-store`), `RemoteStore` (typed wrapper over `remote-store`), `MsgClient` (typed wrapper over `msg`), logging macros, error types. Any module author — CoW, DeFi, gaming, whatever — uses this.
@@ -948,19 +905,19 @@ For **non-Rust** module authors (JavaScript, Python, Go, C++), the SDK is unnece
 
 ## Migration from Current Design
 
-The changes from the current docs (01–07) are additive, not breaking:
+The changes from the current docs (01-07) are additive, not breaking:
 
 | Change | Impact |
 |--------|--------|
-| Rename `state` → `local-store` | WIT interface rename. SDK wrapper updated. Module source uses `local_store::get()` instead of `state::get()`. |
-| Rename `swarm` → `remote-store` | Abstracts the storage backend. WIT interface and SDK wrapper renamed. Swarm is the initial implementation; the interface name is backend-agnostic. |
+| Rename `state` -> `local-store` | WIT interface rename. SDK wrapper updated. Module source uses `local_store::get()` instead of `state::get()`. |
+| Rename `swarm` -> `remote-store` | Abstracts the storage backend. WIT interface and SDK wrapper renamed. Swarm is the initial implementation; the interface name is backend-agnostic. |
 | Add `msg` interface | New WIT interface backed by Waku. Host gains new implementation requirement. Modules that don't import it are unaffected. |
 | Add `message` event variant | Extends the `event` type with `message(message-data)`. Existing handlers for `block`, `logs`, `timer` are unaffected. |
 | Add `ui` interface + `app-module` world | New WIT interface and world. Headless modules are unaffected. Only interactive modules import this. |
 | Split WIT package: `web3:runtime` + `shepherd:cow` | Namespace change. The `shepherd-module` world now `include`s `headless-module` from `web3:runtime`. Module source is unchanged (bindgen generates the same Rust types). |
 | Split SDK: `web3-sdk` + `shepherd-sdk` | Crate restructure. `shepherd-sdk` depends on and re-exports `web3-sdk`. Module authors using `shepherd_sdk::prelude::*` see no change. |
 
-The server runtime (Shepherd) requires two new host implementations: `remote-store` (Bee API — already needed for content distribution) and `msg` (Waku node). Event sources gain a fourth type: `message` (Waku content topic subscriptions).
+The Nexum server runtime requires two new host implementations: `remote-store` (Bee API — already needed for content distribution) and `msg` (Waku node). Event sources gain a fourth type: `message` (Waku content topic subscriptions).
 
 ## Summary
 

@@ -1,29 +1,23 @@
 # Module Discovery
 
-Doc 02 defines how modules are packaged (bundle = `shepherd.toml` + `module.wasm`) and how content is fetched by hash (pluggable content store). This document defines how the runtime **discovers which modules to load** — the layer above content resolution.
+Doc 02 defines how modules are packaged (bundle = `nexum.toml` + `module.wasm`) and how content is fetched by hash (pluggable content store). This document defines how the runtime **discovers which modules to load** — the layer above content resolution.
 
 Three discovery sources, from simplest to most decentralised:
 
-```
-┌─────────────────────────────────────────────────────┐
-│                  Shepherd Runtime                    │
-│                                                     │
-│  ┌───────────────────────────────────────────────┐  │
-│  │             Module Discovery                  │  │
-│  │                                               │  │
-│  │  ┌──────────┐  ┌─────────┐  ┌─────────────┐  │  │
-│  │  │  Static  │  │   ENS   │  │  Registry   │  │  │
-│  │  │  (local) │  │  (name) │  │  (contract) │  │  │
-│  │  └────┬─────┘  └────┬────┘  └──────┬──────┘  │  │
-│  │       │              │              │         │  │
-│  └───────┼──────────────┼──────────────┼─────────┘  │
-│          │              │              │            │
-│          ▼              ▼              ▼            │
-│  ┌───────────────────────────────────────────────┐  │
-│  │           Content Store (doc 02)              │  │
-│  │     Swarm / IPFS / OCI / local / HTTPS        │  │
-│  └───────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph runtime["Nexum Runtime"]
+        subgraph discovery["Module Discovery"]
+            static["Static\n(local)"]
+            ens["ENS\n(name)"]
+            registry["Registry\n(contract)"]
+        end
+        subgraph content["Content Store (doc 02)\nSwarm / IPFS / OCI / local / HTTPS"]
+        end
+        static --> content
+        ens --> content
+        registry --> content
+    end
 ```
 
 ## 1. Static (local path)
@@ -33,7 +27,7 @@ Operator points the runtime at a local manifest. No on-chain interaction.
 ```toml
 [[modules]]
 source = "static"
-manifest = "/var/shepherd/twap-monitor/shepherd.toml"
+manifest = "/var/nexum/twap-monitor/nexum.toml"
 ```
 
 Use case: local development, air-gapped deployments, CI testing.
@@ -60,17 +54,26 @@ twap-monitor.shepherd.eth
 └── text: shepherd.name     →  "twap-monitor"
 ```
 
-The `contenthash` points to the full bundle on Swarm (a directory containing `shepherd.toml` + `module.wasm`). Text records provide lightweight metadata the runtime can read without fetching the bundle — useful for filtering or display.
+The `contenthash` points to the full bundle on Swarm (a directory containing `nexum.toml` + `module.wasm`). Text records provide lightweight metadata the runtime can read without fetching the bundle — useful for filtering or display.
 
 ### Runtime resolution flow
 
-```
-1. Resolve ENS name → get resolver contract address
-2. Call resolver.contenthash(namehash) → get encoded content reference
-3. Decode: protocol 0xe4 (Swarm) + keccak256 hash
-4. Fetch bundle from Swarm via content store
-5. Verify bundle integrity (sha256 of module.wasm matches manifest)
-6. Load module via standard lifecycle (doc 02)
+```mermaid
+sequenceDiagram
+    participant R as Nexum Runtime
+    participant ENS as ENS Registry
+    participant Resolver as Resolver Contract
+    participant Swarm as Content Store (Swarm)
+
+    R->>ENS: 1. Resolve ENS name
+    ENS-->>R: Resolver contract address
+    R->>Resolver: 2. resolver.contenthash(namehash)
+    Resolver-->>R: Encoded content reference
+    R->>R: 3. Decode: protocol 0xe4 (Swarm) + keccak256 hash
+    R->>Swarm: 4. Fetch bundle from Swarm
+    Swarm-->>R: Bundle (nexum.toml + module.wasm)
+    R->>R: 5. Verify bundle integrity (sha256 of module.wasm matches manifest)
+    R->>R: 6. Load module via standard lifecycle (doc 02)
 ```
 
 ### Runtime config
@@ -109,7 +112,7 @@ A simple contract where module authors register their ENS name:
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.0;
 
-interface IShepherdRegistry {
+interface INexumRegistry {
     event ModuleRegistered(
         string indexed ensNameHash,
         string ensName,
@@ -131,7 +134,7 @@ The runtime subscribes to `ModuleRegistered` events, resolves the ENS name from 
 
 This is the more decentralised approach. Instead of a central registry:
 
-1. **Any contract** can associate itself with a Shepherd module by setting a text record on its own ENS name.
+1. **Any contract** can associate itself with a Nexum module by setting a text record on its own ENS name.
 2. The runtime watches for `TextChanged` events on the ENS Public Resolver filtered to the `shepherd.module` key.
 
 For example, ComposableCoW (`composablecow.cow.eth`) sets:
@@ -141,7 +144,7 @@ composablecow.cow.eth
 ├── text: shepherd.module  →  "twap-monitor.shepherd.eth"
 ```
 
-This says: "the Shepherd module for this contract lives at `twap-monitor.shepherd.eth`".
+This says: "the Nexum module for this contract lives at `twap-monitor.shepherd.eth`".
 
 The runtime can either:
 - **Poll** known ENS names for `shepherd.module` text records.
@@ -231,34 +234,37 @@ Examples:
 
 ## How the Pieces Fit Together
 
-```
-Module Author                          Operator / Runtime
-─────────────                          ──────────────────
+```mermaid
+sequenceDiagram
+    participant Author as Module Author
+    participant Swarm as Swarm
+    participant ENS as ENS
+    participant Runtime as Nexum Runtime
 
-1. Write module (Rust/Go/JS/…)
-2. Compile to WASM component
-3. Create shepherd.toml manifest
-4. Upload bundle to Swarm
-   → get content hash (bzz:abc123…)
-5. Set ENS contenthash
-   twap-monitor.shepherd.eth
-   → 0xe4…{swarm-hash}
-                                       6. Runtime config:
-                                          source = "ens"
-                                          name = "twap-monitor.shepherd.eth"
+    Note over Author: 1. Write module (Rust/Go/JS/...)
+    Note over Author: 2. Compile to WASM component
+    Note over Author: 3. Create nexum.toml manifest
+    Author->>Swarm: 4. Upload bundle
+    Swarm-->>Author: Content hash (bzz:abc123...)
+    Author->>ENS: 5. Set contenthash on twap-monitor.shepherd.eth
 
-                                       7. Runtime resolves ENS → contenthash
-                                       8. Fetches bundle from Swarm
-                                       9. Verifies integrity (hash match)
-                                       10. Loads module (compile, init, run)
+    Note over Runtime: 6. Config: source="ens", name="twap-monitor.shepherd.eth"
+    Runtime->>ENS: 7. Resolve ENS → contenthash
+    ENS-->>Runtime: Content reference
+    Runtime->>Swarm: 8. Fetch bundle
+    Swarm-->>Runtime: Bundle
+    Runtime->>Runtime: 9. Verify integrity (hash match)
+    Runtime->>Runtime: 10. Load module (compile, init, run)
 
-── On update ──
-
-11. Upload new bundle to Swarm
-12. Update ENS contenthash
-                                       13. Runtime detects change (poll/event)
-                                       14. Fetches new bundle
-                                       15. Hot-reloads module
+    Note over Author, Runtime: On update
+    Author->>Swarm: 11. Upload new bundle
+    Swarm-->>Author: New content hash
+    Author->>ENS: 12. Update contenthash
+    Runtime->>ENS: 13. Detect change (poll/event)
+    ENS-->>Runtime: New content reference
+    Runtime->>Swarm: 14. Fetch new bundle
+    Swarm-->>Runtime: New bundle
+    Runtime->>Runtime: 15. Hot-reload module
 ```
 
 ## Summary

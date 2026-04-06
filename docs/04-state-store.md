@@ -1,10 +1,10 @@
-# State Store Architecture
+# Local Store Architecture
 
 ## Overview
 
-Every shepherd module has access to a persistent key-value store that survives restarts, crashes, and module updates. The store is backed by **redb** (v3.1, pure Rust, embedded, ACID, MVCC) and exposed to modules through the `state` WIT interface.
+Every Nexum module has access to a persistent key-value store that survives restarts, crashes, and module updates. The store is backed by **redb** (v3.1, pure Rust, embedded, ACID, MVCC) and exposed to modules through the `local-store` WIT interface.
 
-The state store is the only durable memory a module has — WASM linear memory is wiped on every restart. Modules must be written to reconstruct their working state from the store on `init`.
+The local store is the only durable memory a module has — WASM linear memory is wiped on every restart. Modules must be written to reconstruct their working state from the store on `init`.
 
 ## redb Fundamentals
 
@@ -25,18 +25,18 @@ Each module gets its own **redb database file**. Modules cannot read or write ea
 ```rust
 // Runtime side — one database per module
 fn open_module_db(module_id: &str) -> Result<Database> {
-    let path = format!("/var/shepherd/state/{module_id}.redb");
+    let path = format!("/var/nexum/state/{module_id}.redb");
     Database::create(&path)
 }
 
 // Single table within each module's database
-const STATE_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("state");
+const LOCAL_STORE_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("state");
 ```
 
-Module identity = `name` from `shepherd.toml`. If two module instances share a name, they share state (intentional — enables hot-reload with state continuity). Different modules have different names and fully isolated database files.
+Module identity = `name` from `nexum.toml`. If two module instances share a name, they share state (intentional — enables hot-reload with state continuity). Different modules have different names and fully isolated database files.
 
 ```
-/var/shepherd/state/
+/var/nexum/state/
 ├── twap-monitor.redb      →  { "last_block": [...], "posted_parts": [...], ... }
 ├── ethflow-watcher.redb   →  { "pending_orders": [...], ... }
 └── price-alert.redb       →  { "thresholds": [...], ... }
@@ -47,7 +47,7 @@ This per-file design ensures concurrent modules never contend on write locks (se
 ## WIT Interface
 
 ```wit
-interface state {
+interface local-store {
     /// Get a value by key. Returns none if key doesn't exist.
     get: func(key: string) -> result<option<list<u8>>, string>;
 
@@ -78,39 +78,26 @@ list_keys("orders/active/") → ["orders/active/0x1234", "orders/active/0x5678"]
 
 Both `init` and `on_event` execute within an **implicit write transaction**:
 
-```
-Event arrives (or init called)
-  │
-  ▼
-Runtime opens redb WriteTransaction
-  │
-  ▼
-Calls module init(config) or on_event(event)
-  │
-  ├── module calls state::set("key", value)  ──► buffered in txn
-  ├── module calls state::get("key")         ──► reads from txn (sees own writes)
-  ├── module calls state::delete("key")      ──► buffered in txn
-  │
-  ▼
-Call returns Ok(())
-  │
-  ▼
-Runtime commits WriteTransaction
-  │
-  ▼
-State changes are durable
+```mermaid
+flowchart TD
+    A["Event arrives (or init called)"] --> B["Runtime opens redb WriteTransaction"]
+    B --> C["Calls module init(config) or on_event(event)"]
+    C --> D["module calls local-store::set('key', value) -- buffered in txn"]
+    C --> E["module calls local-store::get('key') -- reads from txn (sees own writes)"]
+    C --> F["module calls local-store::delete('key') -- buffered in txn"]
+    D --> G["Call returns Ok(())"]
+    E --> G
+    F --> G
+    G --> H["Runtime commits WriteTransaction"]
+    H --> I["State changes are durable"]
 ```
 
 **On failure** (trap, fuel exhaustion, explicit `Err`):
 
-```
-Call traps / returns Err
-  │
-  ▼
-Runtime aborts WriteTransaction
-  │
-  ▼
-No state changes persisted — atomically rolled back
+```mermaid
+flowchart TD
+    A["Call traps / returns Err"] --> B["Runtime aborts WriteTransaction"]
+    B --> C["No state changes persisted -- atomically rolled back"]
 ```
 
 This gives us **all-or-nothing semantics per call**: either all state mutations from a single `init` or `on_event` callback are applied, or none are. This is critical for correctness — a module that crashes halfway through processing a block doesn't leave behind partial state. Equally, a failed `init` during restart doesn't corrupt state from the previous version.
@@ -120,8 +107,8 @@ This gives us **all-or-nothing semantics per call**: either all state mutations 
 Within a single `on_event` call, a module sees its own uncommitted writes:
 
 ```rust
-state::set("counter", &42u64.to_le_bytes())?;
-let val = state::get("counter")?;
+local_store::set("counter", &42u64.to_le_bytes())?;
+let val = local_store::get("counter")?;
 // val == Some([42, 0, 0, 0, 0, 0, 0, 0])  ✓
 ```
 
@@ -134,7 +121,7 @@ redb allows only **one `WriteTransaction` at a time** per `Database` — a secon
 **Design decision:** each module gets its own redb `Database` file:
 
 ```
-/var/shepherd/state/
+/var/nexum/state/
 ├── twap-monitor.redb
 ├── ethflow-watcher.redb
 └── price-alert.redb
@@ -146,11 +133,11 @@ Within a single module, events are already sequential (doc 02 dispatch semantics
 
 ## Size Enforcement
 
-The manifest declares `max_state_bytes`. The runtime tracks total bytes stored per module and rejects `state::set` calls that would exceed the limit:
+The manifest declares `max_state_bytes`. The runtime tracks total bytes stored per module and rejects `local-store::set` calls that would exceed the limit:
 
 ```rust
 // Host-side enforcement (simplified)
-impl state::Host for ShepherdHostState {
+impl local_store::Host for NexumHostState {
     async fn set(&mut self, key: String, value: Vec<u8>) -> Result<Result<(), String>> {
         let new_size = self.state_bytes_used
             - self.current_value_size(&key)
@@ -177,10 +164,10 @@ On first load, the module's table is empty. The module's `init` function should 
 
 ```rust
 fn init(config: Vec<(String, String)>) -> Result<(), String> {
-    if state::get("initialized")?.is_none() {
+    if local_store::get("initialized")?.is_none() {
         // First run — set up initial state
-        state::set("initialized", &[1])?;
-        state::set("last_block", &0u64.to_le_bytes())?;
+        local_store::set("initialized", &[1])?;
+        local_store::set("last_block", &0u64.to_le_bytes())?;
     }
     Ok(())
 }
@@ -194,7 +181,7 @@ The module should read its checkpoint from state in `init` and resume:
 
 ```rust
 fn init(_config: Vec<(String, String)>) -> Result<(), String> {
-    let last_block = state::get("last_block")?
+    let last_block = local_store::get("last_block")?
         .map(|b| u64::from_le_bytes(b.try_into().unwrap()))
         .unwrap_or(0);
     logging::log(Level::Info, &format!("resuming from block {last_block}"));
@@ -208,14 +195,14 @@ When a module is updated (new WASM binary, same `name` in manifest), the new ver
 
 ```rust
 fn init(config: Vec<(String, String)>) -> Result<(), String> {
-    let version = state::get("schema_version")?
+    let version = local_store::get("schema_version")?
         .map(|b| u64::from_le_bytes(b.try_into().unwrap()))
         .unwrap_or(0);
 
     if version < 2 {
         // Migrate from v1 → v2 schema
         migrate_v1_to_v2()?;
-        state::set("schema_version", &2u64.to_le_bytes())?;
+        local_store::set("schema_version", &2u64.to_le_bytes())?;
     }
     Ok(())
 }
@@ -228,7 +215,7 @@ When an operator removes a module, its state table can optionally be:
 - **Purged** — operator explicitly requests deletion via CLI.
 
 ```bash
-shepherd state purge --module twap-monitor
+nexum state purge --module twap-monitor
 ```
 
 ## Backup and Compaction
@@ -246,7 +233,7 @@ Compaction (`db.compact()`) reclaims space from deleted keys. The runtime can ru
 ## Host-Side Implementation Sketch
 
 ```rust
-const STATE_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("state");
+const LOCAL_STORE_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("state");
 
 struct ModuleStateCtx {
     db: Database,             // per-module database file
@@ -280,7 +267,7 @@ impl ModuleStateCtx {
         &self,
         txn: &'txn WriteTransaction,
     ) -> Result<Table<'txn, &str, &[u8]>> {
-        txn.open_table(STATE_TABLE)
+        txn.open_table(LOCAL_STORE_TABLE)
     }
 }
 ```

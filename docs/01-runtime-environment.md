@@ -34,7 +34,7 @@ The Component Model is **production-viable in wasmtime 41** and gives us critica
 
 4. **Multi-language guests from day 1.** Module authors can use Rust, C/C++, Go, JavaScript (ComponentizeJS), or Python (componentize-py) — all producing valid components against the same WIT world. This dramatically lowers the barrier for community modules.
 
-5. **No WASI required.** The Component Model and WASI are architecturally separate. We define a pure `shepherd:core` world with exactly our host APIs. Zero WASI imports means zero implicit capabilities.
+5. **No WASI required.** The Component Model and WASI are architecturally separate. We define a pure `web3:runtime` world with exactly our host APIs. Zero WASI imports means zero implicit capabilities.
 
 6. **Acceptable overhead.** The canonical ABI adds marshalling for strings/lists (memory copy across boundary), but for a plugin system with coarse-grained calls this is negligible. `InstancePre` front-loads validation costs.
 
@@ -67,10 +67,10 @@ let engine = Engine::new(&config)?;
 
 ### Store
 
-Per-module execution context. Holds component instances, host state (`ShepherdHostState`), fuel counters, resource limits, and the `ResourceTable` for handle management.
+Per-module execution context. Holds component instances, host state (`NexumHostState`), fuel counters, resource limits, and the `ResourceTable` for handle management.
 
 ```rust
-let mut store = Store::new(&engine, ShepherdHostState {
+let mut store = Store::new(&engine, NexumHostState {
     table: ResourceTable::new(),
     rpc: alloy_provider,
     db: redb_handle,
@@ -80,7 +80,7 @@ store.set_fuel(10_000)?;
 store.epoch_deadline_async_yield_and_update(10); // yield after 10 epochs (~1s at 100ms tick)
 ```
 
-### Component → InstancePre → Instance
+### Component -> InstancePre -> Instance
 
 1. **Component**: compiled from `.wasm` component binary (expensive, cacheable, thread-safe).
 2. **Linker**: binds host implementations of our WIT interfaces.
@@ -90,19 +90,23 @@ store.epoch_deadline_async_yield_and_update(10); // yield after 10 epochs (~1s a
 ```rust
 let component = Component::from_file(&engine, "twap_monitor.wasm")?;
 let mut linker = Linker::new(&engine);
-ShepherdModule::add_to_linker(&mut linker, |state| state)?;
+HeadlessModule::add_to_linker(&mut linker, |state| state)?;
 
 // Pre-validate once, instantiate many times (one per store)
 let pre = linker.instantiate_pre(&component)?;
-let bindings = ShepherdModule::instantiate_pre(&mut store, &pre)?;
+let bindings = HeadlessModule::instantiate_pre(&mut store, &pre)?;
 ```
 
-## WIT World: `shepherd:core`
+## WIT Worlds: Universal and CoW-Specific
 
-The WIT definition is the single source of truth for the host↔guest contract. Shepherd defines a custom world with **no WASI imports**:
+Nexum uses a two-layer WIT architecture. The **universal** package `web3:runtime` defines platform-agnostic interfaces and the `headless-module` world. The **CoW-specific** package `shepherd:cow` extends it with CoW Protocol interfaces and the `shepherd-module` world.
+
+### Universal Package: `web3:runtime@0.1.0`
+
+The `web3:runtime` package is the single source of truth for the universal host-guest contract. It defines a custom world with **no WASI imports**:
 
 ```wit
-package shepherd:core@0.1.0;
+package web3:runtime@0.1.0;
 
 interface types {
     type chain-id = u64;
@@ -130,7 +134,7 @@ interface types {
         timer(u64),
     }
 
-    /// Opaque config from shepherd.toml [config] section.
+    /// Opaque config from nexum.toml [config] section.
     type config = list<tuple<string, string>>;
 }
 
@@ -162,8 +166,42 @@ interface csn {
         -> result<string, json-rpc-error>;
 }
 
+interface local-store {
+    get: func(key: string) -> result<option<list<u8>>, string>;
+    set: func(key: string, value: list<u8>) -> result<_, string>;
+    delete: func(key: string) -> result<_, string>;
+    list-keys: func(prefix: string) -> result<list<string>, string>;
+}
+
+interface logging {
+    enum level { trace, debug, info, warn, error }
+    log: func(level: level, message: string);
+}
+
+/// The universal headless module world. Platform-agnostic: no CoW,
+/// no domain-specific imports. Suitable for any web3 automation.
+world headless-module {
+    import csn;
+    import local-store;
+    import logging;
+
+    /// Called once on load. Receives config from nexum.toml.
+    export init: func(config: types.config) -> result<_, string>;
+
+    /// Called for each subscribed event.
+    export on-event: func(event: types.event) -> result<_, string>;
+}
+```
+
+### CoW-Specific Package: `shepherd:cow@0.1.0`
+
+The `shepherd:cow` package extends the universal world with CoW Protocol interfaces:
+
+```wit
+package shepherd:cow@0.1.0;
+
 interface cow {
-    use types.{chain-id};
+    use web3:runtime/types.{chain-id};
 
     record api-error {
         status: u16,
@@ -185,59 +223,52 @@ interface cow {
     ) -> result<string, api-error>;
 }
 
-interface state {
-    get: func(key: string) -> result<option<list<u8>>, string>;
-    set: func(key: string, value: list<u8>) -> result<_, string>;
-    delete: func(key: string) -> result<_, string>;
-    list-keys: func(prefix: string) -> result<list<string>, string>;
-}
-
 interface order {
-    use types.{chain-id};
+    use web3:runtime/types.{chain-id};
 
     submit: func(chain-id: chain-id, order-data: list<u8>)
         -> result<string, string>;
 }
 
-interface logging {
-    enum level { trace, debug, info, warn, error }
-    log: func(level: level, message: string);
-}
-
+/// CoW Protocol module world. Extends the universal headless-module
+/// with CoW-specific imports (cow API, order submission).
 world shepherd-module {
-    import csn;
+    include web3:runtime/headless-module;
+
     import cow;
-    import state;
     import order;
-    import logging;
-
-    /// Called once on load. Receives config from shepherd.toml.
-    export init: func(config: types.config) -> result<_, string>;
-
-    /// Called for each subscribed event.
-    export on-event: func(event: types.event) -> result<_, string>;
 }
 ```
 
-Key properties:
+### Key properties
+
 - **No WASI** — modules cannot access FS, network, clocks, or random.
-- **All I/O through our interfaces** — RPC reads, CoW API, state, order submission, logging.
+- **All I/O through our interfaces** — RPC reads, CoW API, local-store, order submission, logging.
 - **Generic JSON-RPC passthrough** — the `csn` interface exposes a single `request` function. The SDK implements alloy's `Transport` trait on top of it, giving modules the full alloy `Provider` API. See doc 07 for details.
-- **`list<u8>` for raw bytes** — state values, order payloads, etc. The SDK provides typed wrappers.
+- **`list<u8>` for raw bytes** — local-store values, order payloads, etc. The SDK provides typed wrappers.
 - **Resource types** can be added later (e.g. subscription handles, cursor-based log iteration).
+- **Two worlds** — `web3:runtime/headless-module` for platform-agnostic modules; `shepherd:cow/shepherd-module` for CoW Protocol modules that need `cow` and `order` imports.
 
 ## Host-Side Embedding
 
-The host uses `wasmtime::component::bindgen!` to generate Rust traits from the WIT:
+The host uses `wasmtime::component::bindgen!` to generate Rust traits from the WIT. For universal interfaces, the generated traits live under `web3::runtime::`. For CoW-specific interfaces, they live under `shepherd::cow::`.
 
 ```rust
+// Universal headless-module world
 wasmtime::component::bindgen!({
-    path: "wit/shepherd.wit",
+    path: "wit/web3-runtime",
+    world: "headless-module",
+    async: true,
+});
+
+// CoW-specific shepherd-module world (extends headless-module)
+wasmtime::component::bindgen!({
+    path: "wit/shepherd-cow",
     world: "shepherd-module",
     async: true,
 });
 
-impl shepherd::core::csn::Host for ShepherdHostState {
+impl web3::runtime::csn::Host for NexumHostState {
     async fn request(
         &mut self,
         chain_id: u64,
@@ -264,13 +295,18 @@ impl shepherd::core::csn::Host for ShepherdHostState {
     }
 }
 
-impl shepherd::core::state::Host for ShepherdHostState {
+impl web3::runtime::local_store::Host for NexumHostState {
     async fn get(&mut self, key: String) -> Result<Result<Option<Vec<u8>>, String>> {
         // Read from the in-flight WriteTransaction (not a new ReadTransaction)
         // so the module sees its own uncommitted writes within a single on_event.
-        let table = self.write_txn.open_table(self.state_table())?;
+        let table = self.write_txn.open_table(self.local_store_table())?;
         Ok(Ok(table.get(key.as_str())?.map(|v| v.value().to_vec())))
     }
+    // ...
+}
+
+impl shepherd::cow::cow::Host for NexumHostState {
+    // CoW-specific host implementation
     // ...
 }
 ```
@@ -279,7 +315,35 @@ See doc 07 for the full `csn` and `cow` host implementations, method allowlistin
 
 ## Guest-Side (Module Author) Experience
 
-Module authors add the `shepherd-sdk` crate and use the `#[shepherd::module]` proc macro. The macro provides **named event handlers** (`on_block`, `on_logs`, `on_timer`) — it generates the `on_event` match dispatch, WIT export wrapper, and optional provider injection. Handlers can be `async fn` for natural `.await`:
+### Universal modules (`web3-sdk`)
+
+Module authors targeting the universal `headless-module` world add the `web3-sdk` crate and use the `#[web3::module]` proc macro:
+
+```rust
+use web3_sdk::prelude::*;
+
+#[web3::module]
+struct BlockLogger;
+
+impl BlockLogger {
+    fn init(config: Config) -> Result<()> {
+        info!("Block logger starting");
+        Ok(())
+    }
+
+    async fn on_block(block: BlockData, provider: &RootProvider) -> Result<()> {
+        let block_num = provider.get_block_number().await?;
+        info!("New block: {block_num}");
+
+        TypedState::set("last_block", &block_num)?;
+        Ok(())
+    }
+}
+```
+
+### CoW Protocol modules (`shepherd-sdk`)
+
+Module authors targeting the CoW-specific `shepherd-module` world add the `shepherd-sdk` crate and use the `#[shepherd::module]` proc macro. The macro provides **named event handlers** (`on_block`, `on_logs`, `on_timer`) — it generates the `on_event` match dispatch, WIT export wrapper, and optional provider injection. Handlers can be `async fn` for natural `.await`:
 
 ```rust
 use shepherd_sdk::prelude::*;
@@ -345,7 +409,7 @@ See doc 05 for the full macro design (named handlers, provider injection, escape
 | **Python** | componentize-py (CPython) | Maturing |
 | **C#** | `wit-bindgen-csharp` | Emerging |
 
-All produce valid components against the same `shepherd-module` world.
+All produce valid components against the same WIT worlds (`web3:runtime/headless-module` for universal, `shepherd:cow/shepherd-module` for CoW).
 
 ## Execution Metering
 
@@ -387,32 +451,33 @@ All RPC and CoW API I/O is async (alloy / reqwest on the host). wasmtime bridges
 ## WASI: Intentionally Excluded (for now)
 
 - WASI 0.2.1 is stable in wasmtime. WASI 0.3 (native async) is in preview.
-- Shepherd's `shepherd-module` world imports **zero WASI interfaces**.
+- The `headless-module` world imports **zero WASI interfaces**.
 - This is a security feature: components structurally cannot access FS/network/clocks.
 - If a future use case needs selective WASI (e.g. `wasi:clocks` for timing), we can define an extended world:
 
 ```wit
-world shepherd-module-extended {
-    include shepherd-module;
+world headless-module-extended {
+    include headless-module;
     import wasi:clocks/monotonic-clock@0.2.0;
 }
 ```
 
 The host only adds WASI to the linker for modules that request it — capability-based.
 
-## Summary: Shepherd ↔ wasmtime Mapping
+## Summary: Nexum <-> wasmtime Mapping
 
-| Shepherd Concept | wasmtime Primitive |
+| Nexum Concept | wasmtime Primitive |
 |------------------|--------------------|
 | Runtime process | `Engine` (one, shared) |
-| API contract | WIT world (`shepherd-module`) |
+| Universal API contract | WIT world (`web3:runtime/headless-module`) |
+| CoW API contract | WIT world (`shepherd:cow/shepherd-module`) |
 | Compiled module | `Component` (cached, thread-safe) |
 | Pre-validated module | `InstancePre` (linker + component) |
-| Running instance | `Store<ShepherdHostState>` + `Instance` |
+| Running instance | `Store<NexumHostState>` + `Instance` |
 | Host API impl | Traits generated by `bindgen!` |
 | Opaque handles | `Resource<T>` + `ResourceTable` |
 | Per-call budget | Fuel |
 | Wall-clock fairness | Epoch interruption |
 | Memory/table caps | `ResourceLimiter` |
 | Async RPC / CoW I/O | `func_wrap_async` + Tokio |
-| Persistent state | redb (per-module database file, via `state` interface host fns) |
+| Persistent state | redb (per-module database file, via `local-store` interface host fns) |

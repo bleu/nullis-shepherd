@@ -6,13 +6,13 @@ Four resource dimensions are capped per module, all driven by the manifest's `[m
 
 ### CPU: Fuel
 
-Each `on_event` call is budgeted `max_fuel_per_event` fuel units. Exhaustion traps the call (state rolled back — see doc 04). The budget prevents infinite loops and excessive computation.
+Each `on_event` call is budgeted `max_fuel_per_event` fuel units. Exhaustion traps the call (state rolled back -- see doc 04). The budget prevents infinite loops and excessive computation.
 
 ```rust
 store.set_fuel(module_config.max_fuel_per_event)?;
 ```
 
-Fuel is deterministic — the same WASM code consumes the same fuel regardless of host machine speed.
+Fuel is deterministic -- the same WASM code consumes the same fuel regardless of host machine speed.
 
 ### CPU: Epoch (wall-clock)
 
@@ -38,7 +38,7 @@ store.epoch_deadline_async_yield_and_update(10); // yield after 10 epochs (~1s)
 `ResourceLimiter` implementation caps linear memory growth:
 
 ```rust
-impl ResourceLimiter for ShepherdHostState {
+impl ResourceLimiter for NexumHostState {
     fn memory_growing(
         &mut self,
         current: usize,
@@ -71,16 +71,16 @@ impl ResourceLimiter for ShepherdHostState {
 
 ### Storage
 
-State store quota (`max_state_bytes`) enforced in the `state::set` host function (see doc 04). Rejected with a clear error, not a trap — the module can handle it gracefully.
+Local-store quota (`max_state_bytes`) enforced in the `local-store::set` host function (see doc 04). Rejected with a clear error, not a trap -- the module can handle it gracefully.
 
 ### Summary
 
 | Resource | Mechanism | Failure mode |
 |----------|-----------|-------------|
-| CPU (deterministic) | Fuel | Trap → rollback → restart |
-| CPU (wall-clock) | Epoch interruption | Yield → resume or trap |
+| CPU (deterministic) | Fuel | Trap -> rollback -> restart |
+| CPU (wall-clock) | Epoch interruption | Yield -> resume or trap |
 | Memory | `ResourceLimiter` | `memory.grow` returns -1 |
-| Storage | Host-side byte tracking | `state::set` returns `Err` |
+| Storage | Host-side byte tracking | `local-store::set` returns `Err` |
 
 ## Crash Handling & Restart Policy
 
@@ -93,8 +93,8 @@ Attempt 1: restart after 1s
 Attempt 2: restart after 2s
 Attempt 3: restart after 4s
 Attempt 4: restart after 8s
-…
-Attempt N: restart after min(2^(N-1), 300)s   ← capped at 5 minutes
+...
+Attempt N: restart after min(2^(N-1), 300)s   <- capped at 5 minutes
 ```
 
 A successful `on_event` resets the backoff counter to zero.
@@ -126,17 +126,14 @@ impl RestartPolicy {
 
 A module that crashes on every event is a poison pill. After `max_consecutive_failures` (default: 10), the module transitions to `Dead` state:
 
-```
-Consecutive failures ≥ 10
-  │
-  ▼
-Module state → Dead
-  │
-  ├── All event dispatch stops
-  ├── Alert emitted (metric + log)
-  └── Requires manual intervention:
-        shepherd module restart twap-monitor
-        shepherd module reload twap-monitor   # re-fetch + recompile
+```mermaid
+flowchart TD
+    A["Consecutive failures >= 10"] --> B["Module state -> Dead"]
+    B --> C["All event dispatch stops"]
+    B --> D["Alert emitted (metric + log)"]
+    B --> E["Requires manual intervention"]
+    E --> F["nexum module restart twap-monitor"]
+    E --> G["nexum module reload twap-monitor\n(re-fetch + recompile)"]
 ```
 
 The threshold is configurable per-module in the manifest under `[module.restart]` (separate from resource caps):
@@ -148,7 +145,7 @@ max_consecutive_failures = 10
 
 ### Restart Scope
 
-A restart creates a fresh `Store` (clean WASM memory) but reuses the `InstancePre` (no recompilation). The module's `init` is called again. State store data persists (doc 04).
+A restart creates a fresh `Store` (clean WASM memory) but reuses the `InstancePre` (no recompilation). The module's `init` is called again. Local-store data persists (doc 04).
 
 ## RPC Resilience
 
@@ -156,35 +153,21 @@ All RPC I/O flows through alloy providers configured by the runtime operator. Th
 
 ### Provider Stack
 
-```
-Module calls csn::request (via alloy Provider in SDK)
-  │
-  ▼
-Host csn::request impl → alloy Provider
-  │
-  ▼
-┌──────────────────────────────┐
-│     Tower Layer Stack        │
-│                              │
-│  ┌────────────────────────┐  │
-│  │  Timeout (10s default) │  │
-│  └───────────┬────────────┘  │
-│  ┌───────────▼────────────┐  │
-│  │  Retry (3 attempts,    │  │
-│  │  exponential backoff   │  │
-│  │  + jitter)             │  │
-│  └───────────┬────────────┘  │
-│  ┌───────────▼────────────┐  │
-│  │  Rate Limit            │  │
-│  │  (per-endpoint)        │  │
-│  └───────────┬────────────┘  │
-│  ┌───────────▼────────────┐  │
-│  │  Fallback              │  │
-│  │  (primary → secondary) │  │
-│  └───────────┬────────────┘  │
-└──────────────┼───────────────┘
-               ▼
-          RPC Endpoint
+```mermaid
+flowchart TD
+    A["Module calls csn::request\n(via alloy Provider in SDK)"] --> B["Host csn::request impl\n-> alloy Provider"]
+    B --> C["Timeout\n(10s default)"]
+    C --> D["Retry\n(3 attempts, exponential\nbackoff + jitter)"]
+    D --> E["Rate Limit\n(per-endpoint)"]
+    E --> F["Fallback\n(primary -> secondary)"]
+    F --> G["RPC Endpoint"]
+
+    subgraph Tower Layer Stack
+        C
+        D
+        E
+        F
+    end
 ```
 
 ### Operator Configuration
@@ -212,19 +195,14 @@ rate_limit_per_second = 50
 
 WebSocket subscriptions (`eth_subscribe`) drop when the connection is lost. The event source manager detects this and reconnects:
 
-```
-Subscription drops
-  │
-  ▼
-Reconnect with backoff (1s, 2s, 4s, … 30s cap)
-  │
-  ▼
-On reconnect: check for missed blocks
-  │
-  ├── Query eth_blockNumber
-  ├── Compare with last dispatched block
-  ├── Backfill missed blocks via eth_getBlockByNumber
-  └── Resume live subscription
+```mermaid
+flowchart TD
+    A["Subscription drops"] --> B["Reconnect with backoff\n(1s, 2s, 4s, ... 30s cap)"]
+    B --> C["On reconnect: check for missed blocks"]
+    C --> D["Query eth_blockNumber"]
+    C --> E["Compare with last dispatched block"]
+    C --> F["Backfill missed blocks\nvia eth_getBlockByNumber"]
+    F --> G["Resume live subscription"]
 ```
 
 This ensures modules don't silently miss events during RPC outages.
@@ -239,9 +217,9 @@ All runtime logging uses the `tracing` crate with structured fields, output as J
 use tracing::{info, warn, error, instrument, Span};
 
 #[instrument(skip(store), fields(module = %module_id, chain_id))]
-async fn dispatch_event(module_id: &str, event: &Event, store: &mut Store<ShepherdHostState>) {
+async fn dispatch_event(module_id: &str, event: &Event, store: &mut Store<NexumHostState>) {
     info!(event_type = %event.type_name(), "dispatching event");
-    // …
+    // ...
 }
 ```
 
@@ -264,7 +242,7 @@ Every log line includes:
 When a module calls `logging::log(level, message)`, the host writes a `tracing` event tagged with the module's context:
 
 ```rust
-impl logging::Host for ShepherdHostState {
+impl logging::Host for NexumHostState {
     fn log(&mut self, level: Level, message: String) {
         let span = tracing::info_span!("module", module = %self.module_id);
         let _enter = span.enter();
@@ -283,7 +261,7 @@ impl logging::Host for ShepherdHostState {
 
 | Environment | Format | Config |
 |-------------|--------|--------|
-| Development | Pretty, coloured | `RUST_LOG=shepherd=debug` |
+| Development | Pretty, coloured | `RUST_LOG=nexum=debug` |
 | Production | JSON, one line per event | `--log-format json` |
 
 ```json
@@ -313,36 +291,36 @@ The `metrics` crate provides a facade (like `log` for logging). We use `metrics-
 
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|
-| `shepherd_modules_loaded` | Gauge | — | Number of modules currently in Run state |
-| `shepherd_modules_dead` | Gauge | — | Number of modules in Dead state |
-| `shepherd_uptime_seconds` | Counter | — | Runtime uptime |
-| `shepherd_content_fetch_total` | Counter | `scheme` | Content store fetches by scheme |
-| `shepherd_content_fetch_errors` | Counter | `scheme` | Content store fetch failures |
+| `nexum_modules_loaded` | Gauge | -- | Number of modules currently in Run state |
+| `nexum_modules_dead` | Gauge | -- | Number of modules in Dead state |
+| `nexum_uptime_seconds` | Counter | -- | Runtime uptime |
+| `nexum_content_fetch_total` | Counter | `scheme` | Content store fetches by scheme |
+| `nexum_content_fetch_errors` | Counter | `scheme` | Content store fetch failures |
 
 #### Per-module
 
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|
-| `shepherd_events_dispatched_total` | Counter | `module`, `event_type` | Events dispatched |
-| `shepherd_events_processed_total` | Counter | `module`, `event_type` | Events successfully processed |
-| `shepherd_events_failed_total` | Counter | `module`, `event_type` | Events that trapped or returned Err |
-| `shepherd_event_duration_seconds` | Histogram | `module`, `event_type` | Wall-clock time per on_event call |
-| `shepherd_fuel_consumed` | Histogram | `module` | Fuel consumed per on_event call |
-| `shepherd_restarts_total` | Counter | `module` | Total restart count |
-| `shepherd_consecutive_failures` | Gauge | `module` | Current consecutive failure count |
-| `shepherd_state_bytes_used` | Gauge | `module` | Current state store usage in bytes |
-| `shepherd_memory_bytes_used` | Gauge | `module` | Current WASM linear memory size |
+| `nexum_events_dispatched_total` | Counter | `module`, `event_type` | Events dispatched |
+| `nexum_events_processed_total` | Counter | `module`, `event_type` | Events successfully processed |
+| `nexum_events_failed_total` | Counter | `module`, `event_type` | Events that trapped or returned Err |
+| `nexum_event_duration_seconds` | Histogram | `module`, `event_type` | Wall-clock time per on_event call |
+| `nexum_fuel_consumed` | Histogram | `module` | Fuel consumed per on_event call |
+| `nexum_restarts_total` | Counter | `module` | Total restart count |
+| `nexum_consecutive_failures` | Gauge | `module` | Current consecutive failure count |
+| `nexum_state_bytes_used` | Gauge | `module` | Current local-store usage in bytes |
+| `nexum_memory_bytes_used` | Gauge | `module` | Current WASM linear memory size |
 
 #### Per-chain RPC
 
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|
-| `shepherd_rpc_requests_total` | Counter | `chain_id`, `method` | RPC calls made |
-| `shepherd_rpc_errors_total` | Counter | `chain_id`, `method`, `endpoint` | RPC errors |
-| `shepherd_rpc_duration_seconds` | Histogram | `chain_id`, `method` | RPC call latency |
-| `shepherd_rpc_fallbacks_total` | Counter | `chain_id` | Times a fallback endpoint was used |
-| `shepherd_subscription_reconnects_total` | Counter | `chain_id` | Subscription reconnection count |
-| `shepherd_blocks_behind` | Gauge | `chain_id` | Blocks behind head (0 = caught up) |
+| `nexum_rpc_requests_total` | Counter | `chain_id`, `method` | RPC calls made |
+| `nexum_rpc_errors_total` | Counter | `chain_id`, `method`, `endpoint` | RPC errors |
+| `nexum_rpc_duration_seconds` | Histogram | `chain_id`, `method` | RPC call latency |
+| `nexum_rpc_fallbacks_total` | Counter | `chain_id` | Times a fallback endpoint was used |
+| `nexum_subscription_reconnects_total` | Counter | `chain_id` | Subscription reconnection count |
+| `nexum_blocks_behind` | Gauge | `chain_id` | Blocks behind head (0 = caught up) |
 
 ### Exposition
 
@@ -355,9 +333,9 @@ path = "/metrics"
 
 ```bash
 curl http://localhost:9090/metrics
-# HELP shepherd_events_dispatched_total Events dispatched to modules
-# TYPE shepherd_events_dispatched_total counter
-shepherd_events_dispatched_total{module="twap-monitor",event_type="block"} 150234
+# HELP nexum_events_dispatched_total Events dispatched to modules
+# TYPE nexum_events_dispatched_total counter
+nexum_events_dispatched_total{module="twap-monitor",event_type="block"} 150234
 ```
 
 ## Health Checks
@@ -365,7 +343,7 @@ shepherd_events_dispatched_total{module="twap-monitor",event_type="block"} 15023
 ### HTTP Health Endpoint
 
 ```
-GET /health → 200 OK | 503 Service Unavailable
+GET /health -> 200 OK | 503 Service Unavailable
 ```
 
 Response:
@@ -415,50 +393,50 @@ readinessProbe:
 
 ## Alerting Conditions
 
-The runtime itself doesn't send alerts — it exposes metrics and health for external systems (Prometheus + Alertmanager, Grafana, PagerDuty, etc). Recommended alert rules:
+The runtime itself doesn't send alerts -- it exposes metrics and health for external systems (Prometheus + Alertmanager, Grafana, PagerDuty, etc). Recommended alert rules:
 
 | Condition | Severity | Prometheus Expression |
 |-----------|----------|-----------------------|
-| Module entered Dead state | Critical | `shepherd_modules_dead > 0` |
-| High event failure rate | Warning | `rate(shepherd_events_failed_total[5m]) / rate(shepherd_events_dispatched_total[5m]) > 0.1` |
-| Event processing latency spike | Warning | `histogram_quantile(0.99, shepherd_event_duration_seconds) > 5` |
-| RPC endpoint down | Critical | `shepherd_rpc_errors_total` sustained increase with no successes |
-| Chain falling behind | Warning | `shepherd_blocks_behind > 10` |
-| State store near quota | Warning | `shepherd_state_bytes_used / shepherd_state_bytes_limit > 0.9` |
-| Subscription reconnect storm | Warning | `rate(shepherd_subscription_reconnects_total[5m]) > 1` |
+| Module entered Dead state | Critical | `nexum_modules_dead > 0` |
+| High event failure rate | Warning | `rate(nexum_events_failed_total[5m]) / rate(nexum_events_dispatched_total[5m]) > 0.1` |
+| Event processing latency spike | Warning | `histogram_quantile(0.99, nexum_event_duration_seconds) > 5` |
+| RPC endpoint down | Critical | `nexum_rpc_errors_total` sustained increase with no successes |
+| Chain falling behind | Warning | `nexum_blocks_behind > 10` |
+| State store near quota | Warning | `nexum_state_bytes_used / nexum_state_bytes_limit > 0.9` |
+| Subscription reconnect storm | Warning | `rate(nexum_subscription_reconnects_total[5m]) > 1` |
 
 ## Runtime Configuration Summary
 
 ```toml
-# ── Logging ──
+# -- Logging --
 [logging]
 format = "json"             # "json" | "pretty"
 level = "info"              # default filter level
 module_level = "debug"      # filter for module guest logs
 
-# ── Metrics ──
+# -- Metrics --
 [metrics]
 enabled = true
 listen = "0.0.0.0:9090"
 path = "/metrics"
 
-# ── Health ──
+# -- Health --
 [health]
 listen = "0.0.0.0:8080"
 stale_event_threshold_seconds = 60
 
-# ── Epoch ticker ──
+# -- Epoch ticker --
 [runtime]
 epoch_interval_ms = 100
 epoch_deadline = 10          # epochs before yield (~1s)
 
-# ── Global resource defaults (overridden by per-module manifest) ──
+# -- Global resource defaults (overridden by per-module manifest) --
 [runtime.defaults.resources]
 max_memory_bytes = 10_485_760
 max_fuel_per_event = 100_000
 max_state_bytes = 52_428_800
 
-# ── Global restart defaults ──
+# -- Global restart defaults --
 [runtime.defaults.restart]
 max_consecutive_failures = 10
 ```
@@ -469,48 +447,48 @@ max_consecutive_failures = 10
 FROM rust:1.90-slim AS builder
 WORKDIR /build
 COPY . .
-RUN cargo build --release --bin shepherd
+RUN cargo build --release --bin nexum
 
 FROM debian:bookworm-slim
-COPY --from=builder /build/target/release/shepherd /usr/local/bin/
+COPY --from=builder /build/target/release/nexum /usr/local/bin/
 EXPOSE 8080 9090
-ENTRYPOINT ["shepherd", "--config", "/etc/shepherd/config.toml"]
+ENTRYPOINT ["nexum", "--config", "/etc/nexum/config.toml"]
 ```
 
 ```bash
 docker run -d \
-  -v /etc/shepherd:/etc/shepherd \
-  -v /var/shepherd:/var/shepherd \
+  -v /etc/nexum:/etc/nexum \
+  -v /var/nexum:/var/nexum \
   -p 8080:8080 \
   -p 9090:9090 \
-  shepherd:latest
+  nexum:latest
 ```
 
 Volumes:
-- `/etc/shepherd/` — runtime config, module manifests.
-- `/var/shepherd/` — state store (`state.redb`), content cache, logs.
+- `/etc/nexum/` -- runtime config, module manifests.
+- `/var/nexum/` -- local-store (`state.redb`), content cache, logs.
 
 ## Operational Runbook (CLI)
 
 ```bash
 # List loaded modules and their state
-shepherd module list
+nexum module list
 
 # Restart a dead or failed module
-shepherd module restart twap-monitor
+nexum module restart twap-monitor
 
 # Reload a module (re-fetch wasm, recompile)
-shepherd module reload twap-monitor
+nexum module reload twap-monitor
 
-# Purge a module's state
-shepherd state purge --module twap-monitor
+# Purge a module's local-store
+nexum state purge --module twap-monitor
 
 # Compact the state database
-shepherd state compact
+nexum state compact
 
 # Check runtime health
-shepherd health
+nexum health
 
 # Dump metrics
-shepherd metrics
+nexum metrics
 ```

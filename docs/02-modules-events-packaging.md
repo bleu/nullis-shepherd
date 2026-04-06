@@ -1,10 +1,10 @@
 # Module Lifecycle, Event System & Packaging
 
-## Module Package: the Shepherd Module Bundle
+## Module Package: the Nexum Module Bundle
 
-A shepherd module is distributed as a **bundle** — a WASM component plus a manifest that declares its identity, event subscriptions, chain requirements, and resource limits. The manifest is the bridge between packaging, the event system, and the runtime lifecycle.
+A module is distributed as a **bundle** — a WASM component plus a manifest that declares its identity, event subscriptions, chain requirements, and resource limits. The manifest is the bridge between packaging, the event system, and the runtime lifecycle.
 
-### Manifest (`shepherd.toml`)
+### Manifest (`nexum.toml`)
 
 Every module ships with a manifest:
 
@@ -66,7 +66,7 @@ A bundle is a **directory** with a fixed layout:
 
 ```
 twap-monitor/
-├── shepherd.toml          # manifest
+├── nexum.toml             # manifest
 └── module.wasm            # compiled component (matches wasm hash)
 ```
 
@@ -104,13 +104,15 @@ Distribution is **agnostic** — the runtime resolves content by hash through pl
 
 The runtime maintains a local content-addressed store (a directory of blobs keyed by hash). Resolution flow:
 
-```
-1. Read manifest → extract wasm content reference
-2. Check local store for hash
-3. If miss → resolve via configured backend(s)
-4. Verify hash of fetched bytes
-5. Store locally for future use
-6. Return path to verified .wasm
+```mermaid
+flowchart TD
+    A[Read manifest] --> B[Extract wasm content reference]
+    B --> C{Hash in local store?}
+    C -->|Hit| F[Return path to verified .wasm]
+    C -->|Miss| D[Resolve via configured backend]
+    D --> E[Verify hash of fetched bytes]
+    E --> G[Store locally for future use]
+    G --> F
 ```
 
 ### Runtime Source Configuration
@@ -120,7 +122,7 @@ The operator configures available backends in the runtime config:
 ```toml
 [[content.sources]]
 type = "local"
-path = "/var/shepherd/modules"
+path = "/var/nexum/modules"
 
 [[content.sources]]
 type = "swarm"
@@ -140,47 +142,31 @@ This means:
 
 ## Module Lifecycle
 
-```
-                    ┌─────────┐
-                    │ Resolve │  Fetch wasm by content hash
-                    └────┬────┘
-                         │
-                    ┌────▼────┐
-                    │  Load   │  Compile Component, validate WIT world
-                    └────┬────┘
-                         │
-                    ┌────▼────┐
-                    │  Init   │  Call module's init() with config
-                    └────┬────┘
-                         │
-                    ┌────▼────┐
-              ┌────►│  Run    │◄──── Event dispatch loop
-              │     └────┬────┘
-              │          │
-              │     on error/crash
-              │          │
-              │     ┌────▼────┐
-              │     │ Restart │  Exponential backoff
-              │     └────┬────┘
-              │          │
-              └──────────┘
-                         │
-                    on shutdown / poison
-                         │
-                    ┌────▼────┐
-                    │  Dead   │  Logged, no further dispatch
-                    └─────────┘
+```mermaid
+stateDiagram-v2
+    [*] --> Resolve: Fetch wasm by content hash
+    Resolve --> Load: Success
+    Resolve --> Dead: Failure
+    Load --> Init: Component compiled, WIT world validated
+    Load --> Dead: Failure
+    Init --> Run: init() succeeded
+    Init --> Restart: Transient failure
+    Run --> Restart: Error / crash
+    Restart --> Run: Recovered (backoff: 1s → 2s → 4s → … → 5min cap)
+    Restart --> Dead: N consecutive failures (poison pill)
+    Run --> Dead: Operator shutdown
+    Dead --> [*]
 ```
 
 ### States
 
 | State | Description |
 |-------|-------------|
-| **Resolve** | Content store resolves `wasm` hash → local path. Fail → `Dead`. |
-| **Load** | `Component::from_file`, create `InstancePre`. Validates that the component satisfies the `shepherd-module` world. Fail → `Dead`. |
-| **Init** | Create `Store`, instantiate, call `init(config)` inside an implicit write transaction (same semantics as `on_event` — commit on success, rollback on failure). Module sets up internal state. Fail → `Restart` (might be transient). |
-| **Run** | Runtime dispatches events to `on_event`. Each call gets a fuel budget. Module processes events and may call host imports (csn, cow, state, order). |
-| **Restart** | After a trap or error. Backoff: 1s → 2s → 4s → … → 5min cap. A fresh `Store` is created (clean memory), but **state store data persists** (it's in redb, external to the WASM instance). |
+| **Resolve** | Content store resolves `wasm` hash to local path. Fail -> `Dead`. |
+| **Load** | `Component::from_file`, create `InstancePre`. Validates that the component satisfies the target WIT world (`web3:runtime/headless-module` or `shepherd:cow/shepherd-module`). Fail -> `Dead`. |
+| **Init** | Create `Store`, instantiate, call `init(config)` inside an implicit write transaction (same semantics as `on_event` — commit on success, rollback on failure). Module sets up internal state. Fail -> `Restart` (might be transient). |
+| **Run** | Runtime dispatches events to `on_event`. Each call gets a fuel budget. Module processes events and may call host imports (csn, local-store, cow, order). |
+| **Restart** | After a trap or error. Backoff: 1s -> 2s -> 4s -> ... -> 5min cap. A fresh `Store` is created (clean memory), but **local-store data persists** (it's in redb, external to the WASM instance). |
 | **Dead** | After N consecutive failures (poison pill detection) or explicit operator shutdown. No further event dispatch. Requires manual intervention. |
 
 ### Key Lifecycle Properties
@@ -195,31 +181,28 @@ This means:
 
 ### Architecture
 
-```
-┌────────────────────────────────────────────────┐
-│                 Shepherd Runtime                │
-│                                                │
-│  ┌──────────────────────────────────────────┐  │
-│  │           Event Source Manager            │  │
-│  │                                          │  │
-│  │  ┌────────────┐ ┌──────────┐ ┌────────┐  │  │
-│  │  │   Block    │ │   Log    │ │  Cron  │  │  │
-│  │  │ Subscriber │ │ Watcher  │ │ Ticker │  │  │
-│  │  └─────┬──────┘ └────┬─────┘ └───┬────┘  │  │
-│  │        │              │           │       │  │
-│  └────────┼──────────────┼───────────┼───────┘  │
-│           │              │           │          │
-│           ▼              ▼           ▼          │
-│  ┌──────────────────────────────────────────┐  │
-│  │              Event Router                │  │
-│  │   (manifest subscriptions → modules)     │  │
-│  └──────┬──────────┬──────────┬─────────────┘  │
-│         │          │          │                 │
-│    ┌────▼───┐ ┌────▼───┐ ┌───▼────┐            │
-│    │ Module │ │ Module │ │ Module │            │
-│    │   A    │ │   B    │ │   C    │            │
-│    └────────┘ └────────┘ └────────┘            │
-└────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    subgraph ESM["Event Source Manager"]
+        BS["Block Subscriber"]
+        LW["Log Watcher"]
+        CT["Cron Ticker"]
+    end
+
+    subgraph NR["Nexum Runtime"]
+        ESM
+        ER["Event Router\n(manifest subscriptions → modules)"]
+        MA["Module A"]
+        MB["Module B"]
+        MC["Module C"]
+    end
+
+    BS --> ER
+    LW --> ER
+    CT --> ER
+    ER --> MA
+    ER --> MB
+    ER --> MC
 ```
 
 ### Event Sources
@@ -259,8 +242,8 @@ When an event fires:
 - **Concurrent across modules.** A block event is dispatched to all subscribed modules concurrently. One slow module does not block another.
 - **Sequential within a module.** Events for the same module are dispatched in order. A module sees block N before block N+1. This is enforced by a per-module dispatch queue (Tokio `mpsc` channel).
 - **Best-effort delivery.** If a module is in Restart state when an event arrives, the event is queued (bounded buffer). If the buffer fills, oldest events are dropped and a warning is logged.
-- **No acknowledgement.** A successful return from `on_event` is not an ack. The module is responsible for using the state store to track its own progress (e.g. "last processed block").
-- **Catch-up after gaps.** Events can be dropped during restart (bounded buffer overflow). Modules should query for missed data on startup — e.g. in `init`, read `last_block` from state, use the alloy `Provider` (backed by `csn::request`) to call `get_block_number()` and `get_logs()` to backfill any gap. This is a best practice, not enforced by the runtime.
+- **No acknowledgement.** A successful return from `on_event` is not an ack. The module is responsible for using the local-store to track its own progress (e.g. "last processed block").
+- **Catch-up after gaps.** Events can be dropped during restart (bounded buffer overflow). Modules should query for missed data on startup — e.g. in `init`, read `last_block` from local-store, use the alloy `Provider` (backed by `csn::request`) to call `get_block_number()` and `get_logs()` to backfill any gap. This is a best practice, not enforced by the runtime.
 
 ### Event Type Encoding
 
@@ -283,12 +266,14 @@ record block-data {
 
 The runtime serialises event data via the canonical ABI (handled automatically by `bindgen!`).
 
-## Updated WIT World
+## Updated WIT Worlds
 
-The initial WIT in `01-runtime-environment.md` is extended to support the lifecycle and config:
+The initial WIT in `01-runtime-environment.md` is extended to support the lifecycle and config. The architecture uses two packages: `web3:runtime` for universal interfaces and `shepherd:cow` for CoW Protocol extensions.
+
+### Universal Package: `web3:runtime@0.1.0`
 
 ```wit
-package shepherd:core@0.1.0;
+package web3:runtime@0.1.0;
 
 interface types {
     type chain-id = u64;
@@ -316,7 +301,7 @@ interface types {
         timer(u64),
     }
 
-    /// Opaque config map from shepherd.toml [config] section.
+    /// Opaque config map from nexum.toml [config] section.
     type config = list<tuple<string, string>>;
 }
 
@@ -334,8 +319,39 @@ interface csn {
         -> result<string, json-rpc-error>;
 }
 
+interface local-store {
+    get: func(key: string) -> result<option<list<u8>>, string>;
+    set: func(key: string, value: list<u8>) -> result<_, string>;
+    delete: func(key: string) -> result<_, string>;
+    list-keys: func(prefix: string) -> result<list<string>, string>;
+}
+
+interface logging {
+    enum level { trace, debug, info, warn, error }
+    log: func(level: level, message: string);
+}
+
+/// Universal headless module world — platform-agnostic.
+world headless-module {
+    import csn;
+    import local-store;
+    import logging;
+
+    /// Called once on load. Receives config from nexum.toml.
+    export init: func(config: types.config) -> result<_, string>;
+
+    /// Called for each subscribed event.
+    export on-event: func(event: types.event) -> result<_, string>;
+}
+```
+
+### CoW-Specific Package: `shepherd:cow@0.1.0`
+
+```wit
+package shepherd:cow@0.1.0;
+
 interface cow {
-    use types.{chain-id};
+    use web3:runtime/types.{chain-id};
 
     record api-error {
         status: u16,
@@ -352,37 +368,20 @@ interface cow {
     ) -> result<string, api-error>;
 }
 
-interface state {
-    get: func(key: string) -> result<option<list<u8>>, string>;
-    set: func(key: string, value: list<u8>) -> result<_, string>;
-    delete: func(key: string) -> result<_, string>;
-    list-keys: func(prefix: string) -> result<list<string>, string>;
-}
-
 interface order {
-    use types.{chain-id};
+    use web3:runtime/types.{chain-id};
 
     submit: func(chain-id: chain-id, order-data: list<u8>)
         -> result<string, string>;
 }
 
-interface logging {
-    enum level { trace, debug, info, warn, error }
-    log: func(level: level, message: string);
-}
-
+/// CoW Protocol module world — extends headless-module with
+/// CoW-specific imports (cow API, order submission).
 world shepherd-module {
-    import csn;
+    include web3:runtime/headless-module;
+
     import cow;
-    import state;
     import order;
-    import logging;
-
-    /// Called once on load. Receives config from shepherd.toml.
-    export init: func(config: types.config) -> result<_, string>;
-
-    /// Called for each subscribed event.
-    export on-event: func(event: types.event) -> result<_, string>;
 }
 ```
 
@@ -394,14 +393,15 @@ Operator deploys a module:
 1. Operator adds entry to runtime config:
 
    [[modules]]
-   manifest = "/var/shepherd/twap-monitor/shepherd.toml"
+   manifest = "/var/nexum/twap-monitor/nexum.toml"
 
 2. Runtime reads manifest:
    - Resolves wasm content hash → fetches from Swarm/local/OCI
    - Verifies integrity (sha256 match)
 
 3. Runtime compiles Component, creates InstancePre:
-   - Validates component satisfies `shepherd-module` world
+   - Validates component satisfies target world
+     (web3:runtime/headless-module or shepherd:cow/shepherd-module)
    - Enforces resource limits from manifest
 
 4. Runtime calls init(config):
@@ -417,12 +417,12 @@ Operator deploys a module:
    Block 19_000_001 on Arbitrum
    → Router → twap-monitor's dispatch queue
    → Tokio task calls on_event(Event::Block(…))
-   → Module calls csn::request (via alloy Provider), state_get, order_submit
+   → Module calls csn::request (via alloy Provider), local_store_get, order_submit
    → Returns Ok(()) — runtime logs success
 
 7. On crash:
    → Module trapped (fuel exhaustion / panic)
    → Runtime logs error, enters Restart state
    → Backoff 1s, creates fresh Store, calls init again
-   → State store data still intact — module resumes
+   → Local-store data still intact — module resumes
 ```

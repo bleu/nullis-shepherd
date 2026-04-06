@@ -32,28 +32,24 @@ From the guest's perspective, host function calls are synchronous (they block un
 
 ### Architecture
 
-```
-Module author code
-    │
-    │  provider.get_block_number()      ← full alloy Provider API
-    │  provider.call(tx).latest()
-    │  provider.get_logs(&filter)
-    │
-    ▼
-HostTransport (SDK)                     ← implements alloy Transport trait
-    │
-    │  csn::request(chain_id, "eth_blockNumber", "[]")
-    │
-    ▼
-WIT boundary                            ← single generic function
-    │
-    ▼
-Host csn::request impl                  ← forwards to alloy provider
-    │
-    │  provider.raw_request_dyn(method, params)
-    │
-    ▼
-Alloy provider stack                    ← timeout → retry → rate-limit → fallback → RPC
+```mermaid
+flowchart TD
+    A["Module author code
+    provider.get_block_number()
+    provider.call(tx).latest()
+    provider.get_logs(&filter)"] -->|full alloy Provider API| B
+
+    B["HostTransport (SDK)
+    implements alloy Transport trait"] -->|"csn::request(chain_id, &quot;eth_blockNumber&quot;, &quot;[]&quot;)"| C
+
+    C["WIT boundary
+    single generic function"] --> D
+
+    D["Host csn::request impl
+    forwards to alloy provider"] -->|"provider.raw_request_dyn(method, params)"| E
+
+    E["Alloy provider stack
+    timeout -> retry -> rate-limit -> fallback -> RPC"]
 ```
 
 ## Updated WIT Interface
@@ -61,7 +57,7 @@ Alloy provider stack                    ← timeout → retry → rate-limit →
 Replace the `blockchain` interface with `csn`:
 
 ```wit
-package shepherd:core@0.1.0;
+package web3:runtime@0.1.0;
 
 interface csn {
     use types.{chain-id};
@@ -88,17 +84,28 @@ interface csn {
 }
 ```
 
-The `types` interface is unchanged. The `state`, `order`, and `logging` interfaces are unchanged.
+The `types` interface is unchanged. The `local-store`, `order`, and `logging` interfaces are unchanged.
+
+The universal `headless-module` world (in `web3:runtime`) contains only the platform-agnostic interfaces:
 
 ```wit
-world shepherd-module {
+world headless-module {
     import csn;          // replaces `import blockchain;`
-    import state;
-    import order;
+    import local-store;
     import logging;
 
     export init: func(config: types.config) -> result<_, string>;
     export on-event: func(event: types.event) -> result<_, string>;
+}
+```
+
+The CoW-specific `shepherd-module` world (in `shepherd:cow`) extends it with domain interfaces:
+
+```wit
+world shepherd-module {
+    include web3:runtime/headless-module;
+    import cow;
+    import order;
 }
 ```
 
@@ -128,7 +135,7 @@ The host implementation is minimal — one function handles the entire `eth_` na
 ```rust
 use serde_json::value::RawValue;
 
-impl shepherd::core::csn::Host for ShepherdHostState {
+impl web3::runtime::csn::Host for NexumHostState {
     async fn request(
         &mut self,
         chain_id: u64,
@@ -159,7 +166,7 @@ impl shepherd::core::csn::Host for ShepherdHostState {
 
         match provider.raw_request_dyn(method.into(), &raw_params).await {
             Ok(result) => Ok(Ok(result.get().to_string())),
-            Err(e) => Ok(Err(e.into())), // TransportError → JsonRpcError
+            Err(e) => Ok(Err(e.into())), // TransportError -> JsonRpcError
         }
     }
 }
@@ -172,7 +179,7 @@ That's it. The alloy provider already has the timeout/retry/rate-limit/fallback 
 The host maintains an allowlist of methods modules may call. This is a security boundary — modules should not be able to call `eth_sendRawTransaction`, for example.
 
 ```rust
-impl ShepherdHostState {
+impl NexumHostState {
     fn is_method_allowed(&self, method: &str) -> bool {
         // Default allowlist: read-only eth_ methods
         matches!(method,
@@ -201,7 +208,7 @@ impl ShepherdHostState {
 }
 ```
 
-This could be made configurable per-module via `shepherd.toml`:
+This could be made configurable per-module via `nexum.toml`:
 
 ```toml
 [module.csn]
@@ -228,7 +235,7 @@ use tower::Service;
 use std::task::{Context, Poll};
 
 /// An alloy-compatible transport that routes JSON-RPC requests through the
-/// Shepherd host runtime. Synchronous from the guest's perspective — the host
+/// Nexum host runtime. Synchronous from the guest's perspective — the host
 /// function blocks until the RPC response is available.
 #[derive(Debug, Clone)]
 pub struct HostTransport {
@@ -339,14 +346,14 @@ pub fn block_on<F: Future>(future: F) -> F::Output {
 use alloy_provider::RootProvider;
 use alloy_rpc_client::RpcClient;
 
-/// Create an alloy `Provider` backed by the Shepherd host runtime.
+/// Create an alloy `Provider` backed by the Nexum host runtime.
 ///
 /// The returned provider supports the full alloy `Provider` API — all `eth_*`
 /// methods, builder patterns, typed responses — routing every request through
 /// the host's RPC stack (timeout, retry, rate-limit, failover).
 ///
 /// ```rust
-/// let provider = shepherd_sdk::provider(42161);
+/// let provider = web3_sdk::provider(42161);
 /// let block = provider.get_block_number().await?;
 /// ```
 pub fn provider(chain_id: u64) -> RootProvider {
@@ -371,16 +378,16 @@ This is verbose and obscures the actual logic. But we can't reimplement every `P
 
 ### The Solution: Named Event Handlers + `async fn`
 
-The `#[shepherd::module]` proc macro (see doc 05) already generates the WIT export boilerplate. We extend it in two ways:
+The proc macro (see doc 05) already generates the WIT export boilerplate. We extend it in two ways. For universal modules, the `#[web3::module]` macro is used; for CoW modules, the `#[shepherd::module]` macro (which extends the universal one with CoW-specific imports):
 
 1. **Named event handlers** — instead of writing the `match event { ... }` dispatch manually, module authors implement `on_block`, `on_logs`, and/or `on_timer`. The macro generates the `on_event` match.
 2. **`async fn` support** — handlers can be async. The macro wraps the generated `on_event` in `block_on()`, so `.await` works naturally.
 3. **Provider injection** — if a handler accepts `&RootProvider` as a second parameter, the macro creates the provider from the event's chain_id and passes it in.
 
-**What the module author writes:**
+**What the module author writes (universal module):**
 
 ```rust
-#[shepherd::module]
+#[web3::module]
 struct MyModule;
 
 impl MyModule {
@@ -397,7 +404,23 @@ impl MyModule {
         Ok(())
     }
 
-    // on_timer not defined → timer events silently ignored
+    // on_timer not defined -> timer events silently ignored
+}
+```
+
+**What the module author writes (CoW module):**
+
+```rust
+#[shepherd::module]
+struct MyModule;
+
+impl MyModule {
+    async fn on_block(block: BlockData, provider: &RootProvider) -> Result<()> {
+        let cow = CowClient::new(block.chain_id);
+        let block_num = provider.get_block_number().await?;
+        cow.submit_order(&order)?;
+        Ok(())
+    }
 }
 ```
 
@@ -406,14 +429,14 @@ impl MyModule {
 ```rust
 impl Guest for MyModule {
     fn on_event(event: types::Event) -> Result<(), String> {
-        shepherd_sdk::block_on(async {
+        web3_sdk::block_on(async {
             match event {
                 Event::Block(block) => {
-                    let provider = shepherd_sdk::provider(block.chain_id);
+                    let provider = web3_sdk::provider(block.chain_id);
                     MyModule::on_block(block, &provider).await
                 }
                 Event::Logs(logs) => {
-                    let provider = shepherd_sdk::provider(logs[0].chain_id);
+                    let provider = web3_sdk::provider(logs[0].chain_id);
                     MyModule::on_logs(logs, &provider).await
                 }
                 Event::Timer(_) => Ok(()),  // no handler defined
@@ -434,10 +457,10 @@ The generated code calls `block_on` exactly once — at the top-level export bou
 | `on_timer(timestamp)` | `u64` | None (no chain context) |
 
 The macro inspects each handler's signature:
-- **Second parameter is `&RootProvider`** → inject `shepherd_sdk::provider(chain_id)`
-- **No second parameter** → pass only the payload
-- **Async handlers** → wrapped in `block_on`; sync handlers called directly
-- **Missing handlers** → `Ok(())` for that variant (no-op)
+- **Second parameter is `&RootProvider`** -> inject `web3_sdk::provider(chain_id)`
+- **No second parameter** -> pass only the payload
+- **Async handlers** -> wrapped in `block_on`; sync handlers called directly
+- **Missing handlers** -> `Ok(())` for that variant (no-op)
 
 **Escape hatch:** defining `on_event` directly takes precedence — the macro uses it as-is (wrapping in `block_on` if async) and ignores named handlers.
 
@@ -490,14 +513,14 @@ The named handler + async macro approach eliminates boilerplate at both the even
 ### Before (Per-Method WIT)
 
 ```rust
-use shepherd_sdk::prelude::*;
-use shepherd_sdk::abi::sol;
+use web3_sdk::prelude::*;
+use web3_sdk::abi::sol;
 
 sol! {
     function balanceOf(address owner) view returns (uint256);
 }
 
-#[shepherd::module]
+#[web3::module]
 struct MyModule;
 
 impl MyModule {
@@ -527,13 +550,13 @@ impl MyModule {
 ### After (Generic RPC + named handlers + provider injection)
 
 ```rust
-use shepherd_sdk::prelude::*;
+use web3_sdk::prelude::*;
 
 sol! {
     function balanceOf(address owner) view returns (uint256);
 }
 
-#[shepherd::module]
+#[web3::module]
 struct MyModule;
 
 impl MyModule {
@@ -568,7 +591,7 @@ impl MyModule {
     }
 
     // Only implement handlers for event types you care about.
-    // No on_logs or on_timer → those events are no-ops.
+    // No on_logs or on_timer -> those events are no-ops.
 }
 ```
 
@@ -582,7 +605,7 @@ CoW Protocol's API is REST-based, not JSON-RPC. Two options:
 
 ```wit
 interface cow {
-    use types.{chain-id};
+    use web3:runtime/types.{chain-id};
 
     record api-error {
         status: u16,
@@ -612,21 +635,16 @@ interface cow {
 
 ```wit
 world shepherd-module {
-    import csn;
+    include web3:runtime/headless-module;
     import cow;       // CoW Protocol API access
-    import state;
     import order;     // kept for backwards compat; could merge into cow
-    import logging;
-
-    export init: func(config: types.config) -> result<_, string>;
-    export on-event: func(event: types.event) -> result<_, string>;
 }
 ```
 
 The host implementation is similarly minimal:
 
 ```rust
-impl shepherd::core::cow::Host for ShepherdHostState {
+impl shepherd::cow::cow::Host for NexumHostState {
     async fn request(
         &mut self,
         chain_id: u64,
@@ -759,24 +777,33 @@ async fn on_block(block: BlockData, provider: &RootProvider) -> Result<()> {
 ## Updated SDK Crate Structure
 
 ```
-shepherd-sdk/
+web3-sdk/
 ├── Cargo.toml
 ├── src/
 │   ├── lib.rs               # re-exports, prelude, provider() constructor
 │   ├── bindings.rs           # generated WIT bindings
-│   ├── transport.rs          # HostTransport (alloy Transport impl)   ← NEW
-│   ├── cow.rs                # CowClient typed wrapper                ← NEW
-│   ├── state.rs              # TypedState helpers (unchanged)
-│   ├── abi.rs                # alloy-sol-types integration (unchanged)
-│   ├── log.rs                # logging macros (unchanged)
+│   ├── transport.rs          # HostTransport (alloy Transport impl)
+│   ├── local_store.rs        # TypedState helpers (serde over local-store)
+│   ├── abi.rs                # alloy-sol-types integration
+│   ├── log.rs                # logging macros
 │   ├── error.rs              # error types
 │   └── testing.rs            # mock host, test harness
 └── macros/
     └── src/
-        └── lib.rs            # #[shepherd::module] proc macro
+        └── lib.rs            # #[web3::module] proc macro
+
+shepherd-sdk/
+├── Cargo.toml                # depends on web3-sdk, re-exports it
+├── src/
+│   ├── lib.rs                # re-exports web3-sdk + CoW additions
+│   ├── cow.rs                # CowClient typed wrapper
+│   └── order.rs              # order submission helpers
+└── macros/
+    └── src/
+        └── lib.rs            # #[shepherd::module] proc macro (extends web3::module)
 ```
 
-New dependencies:
+New dependencies (in `web3-sdk`):
 
 ```toml
 [dependencies]
@@ -798,16 +825,13 @@ All alloy crates with `default-features = false` to avoid pulling in reqwest, to
 ## Updated Prelude
 
 ```rust
-// shepherd_sdk::prelude
-pub use crate::bindings::shepherd::core::types::*;
-pub use crate::bindings::shepherd::core::csn;       // replaces blockchain
-pub use crate::bindings::shepherd::core::cow;        // new
-pub use crate::bindings::shepherd::core::state;
-pub use crate::bindings::shepherd::core::order;
-pub use crate::bindings::shepherd::core::logging;
+// web3_sdk::prelude
+pub use crate::bindings::web3::runtime::types::*;
+pub use crate::bindings::web3::runtime::csn;
+pub use crate::bindings::web3::runtime::local_store;
+pub use crate::bindings::web3::runtime::logging;
 pub use crate::log::{trace, debug, info, warn, error};
-pub use crate::state::TypedState;
-pub use crate::cow::CowClient;
+pub use crate::local_store::TypedState;
 pub use crate::transport::HostTransport;
 pub use crate::{provider, block_on};
 pub use crate::error::{Result, Error};
@@ -819,6 +843,14 @@ pub use alloy_rpc_types::*;
 pub use alloy_provider::Provider;
 ```
 
+```rust
+// shepherd_sdk::prelude (re-exports web3_sdk::prelude + CoW additions)
+pub use web3_sdk::prelude::*;
+pub use crate::bindings::shepherd::cow::cow;
+pub use crate::bindings::shepherd::cow::order;
+pub use crate::cow::CowClient;
+```
+
 ## Testing
 
 ### MockTransport for Unit Tests
@@ -826,7 +858,7 @@ pub use alloy_provider::Provider;
 The SDK testing module provides a mock transport that mirrors alloy's own `Asserter`-based testing pattern:
 
 ```rust
-use shepherd_sdk::testing::MockProvider;
+use web3_sdk::testing::MockProvider;
 
 #[test]
 fn test_reads_balance() {
@@ -904,9 +936,9 @@ If starting from scratch (recommended): implement `csn` only. Skip `blockchain` 
 
 | Component | What Changes |
 |---|---|
-| **WIT** | Replace `blockchain` with `csn` (1 function). Add `cow` interface. |
+| **WIT** | Replace `blockchain` with `csn` (1 function). Add `cow` interface in `shepherd:cow`. |
 | **Host** | One `csn::request` impl forwarding to `provider.raw_request_dyn`. One `cow::request` impl forwarding to HTTP client. |
-| **SDK** | Add `HostTransport` (alloy `Transport` impl), `provider()` constructor, `block_on()`, `CowClient`. |
-| **`#[shepherd::module]` macro** | Named event handlers (`on_block`, `on_logs`, `on_timer`) with generated match dispatch. `async fn` support. Optional `&RootProvider` injection. |
+| **SDK** | `web3-sdk`: `HostTransport` (alloy `Transport` impl), `provider()` constructor, `block_on()`. `shepherd-sdk`: `CowClient`, order helpers (extends `web3-sdk`). |
+| **`#[web3::module]` / `#[shepherd::module]` macros** | Named event handlers (`on_block`, `on_logs`, `on_timer`) with generated match dispatch. `async fn` support. Optional `&RootProvider` injection. `#[web3::module]` for universal modules; `#[shepherd::module]` for CoW modules. |
 | **Module author experience** | Full alloy `Provider` API via injected provider. Full CoW API via `CowClient`. No match boilerplate. No `block_on`. No manual ABI wrangling for RPC calls. |
 | **Existing ABI helpers** | Unchanged — `sol!` macro and `alloy-sol-types` still used for contract calldata encoding/decoding. |

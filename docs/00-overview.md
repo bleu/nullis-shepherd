@@ -1,45 +1,45 @@
-# Shepherd: Programmable Blockchain Automation
+# Nexum: Universal WASM Component Model Runtime
 
-Shepherd is a WASM Component Model runtime that replaces CoW Protocol's hardcoded watch-tower with a programmable, sandboxed execution layer. Developers deploy WebAssembly components ("shepherds") that react to blockchain events, read chain state, submit orders to CoW Protocol, and persist data — all within a secure sandbox with no implicit capabilities.
+Nexum is a WASM Component Model runtime that provides secure, sandboxed execution for WebAssembly modules. Modules react to blockchain events, read chain state, persist data locally and to decentralised storage, communicate via decentralised messaging — all within a capability-based sandbox with zero implicit permissions.
 
-## Architecture at a Glance
+**Shepherd** is the Nexum distribution that includes CoW Protocol extensions (`shepherd:cow` WIT package). A module compiled against the universal `web3:runtime/headless-module` world runs on any Nexum-compatible host. A module compiled against `shepherd:cow/shepherd-module` additionally gains access to CoW Protocol APIs and order submission — and requires a Shepherd host.
 
-```
-                    ┌──────────────────────────────────────────────────────┐
-                    │                  Shepherd Runtime                    │
-                    │                                                      │
- Module Discovery   │  ┌────────────────────────────────────────────────┐  │
- ─────────────────► │  │            Module Manager                      │  │
- • Static (local)   │  │  Load → Init → Run → Restart → Dead           │  │
- • ENS contenthash  │  │                                                │  │
- • On-chain registry│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐       │  │
-                    │  │  │ Module A │ │ Module B │ │ Module C │       │  │
-                    │  │  │ (WASM)   │ │ (WASM)   │ │ (WASM)   │       │  │
-                    │  │  └────┬─────┘ └────┬─────┘ └────┬─────┘       │  │
-                    │  └───────┼────────────┼────────────┼──────────────┘  │
-                    │          │            │            │                  │
-                    │  ┌───────▼────────────▼────────────▼──────────────┐  │
-                    │  │              Host API (WIT)                    │  │
-                    │  │  csn · local-store · remote-store · msg · logging  │  │
-                    │  │  cow · order (domain extensions)                  │  │
-                    │  └───────┬────────────┬────────────┬──────────────┘  │
-                    │          │            │            │                  │
-                    │   ┌──────▼──────┐ ┌──▼───┐ ┌──────▼──────┐          │
-                    │   │ alloy (RPC) │ │ redb │ │ Swarm/Waku  │          │
-                    │   │ CoW API     │ │      │ │             │          │
-                    │   └──────┬──────┘ └──────┘ └─────────────┘          │
-                    │          │                                            │
-                    │  ┌───────▼────────────────────────────────────────┐  │
-                    │  │           Event Source Manager                 │  │
-                    │  │  Block subscribers · Log watchers · Cron       │  │
-                    │  └───────────────────────────────────────────────-┘  │
-                    │                                                      │
-                    │  ┌────────────────────────────────────────────────┐  │
-                    │  │           Observability                        │  │
-                    │  │  tracing (JSON logs) · metrics (Prometheus)    │  │
-                    │  │  /health endpoint · CLI                        │  │
-                    │  └────────────────────────────────────────────────┘  │
-                    └──────────────────────────────────────────────────────┘
+## Architecture
+
+```mermaid
+flowchart TB
+    disc["Module Discovery\nStatic · ENS · On-chain Registry"] --> mm
+
+    subgraph nexum["Nexum Runtime"]
+        mm["Module Manager\nLoad → Init → Run → Restart → Dead"]
+
+        subgraph mods["WASM Modules"]
+            ma["Module A"]
+            mb["Module B"]
+            mc["Module C"]
+        end
+
+        subgraph host["Host API — WIT Interfaces"]
+            uni["web3:runtime\ncsn · local-store · remote-store · msg · logging"]
+            ext["shepherd:cow\ncow · order"]
+        end
+
+        subgraph back["Backends"]
+            alloy["alloy\nRPC Provider"]
+            redb["redb\nLocal Store"]
+            bee["Bee\nSwarm"]
+            waku["Waku\nMessaging"]
+            trace["tracing\nLogs"]
+        end
+
+        ev["Event Sources\nBlocks · Logs · Cron · Messages"]
+        obs["Observability\nPrometheus · Health · Structured Logs"]
+    end
+
+    mm --> mods
+    mods --> host
+    host --> back
+    ev --> mods
 ```
 
 ## Design Principles
@@ -50,25 +50,46 @@ Shepherd is a WASM Component Model runtime that replaces CoW Protocol's hardcode
 - **Content-addressed distribution** — modules are fetched by hash (Swarm, IPFS, OCI, HTTPS); integrity always verified.
 - **Self-hosted** — no centralised dependency; operator runs their own node.
 
-## Technology Stack
+## The Five Primitives
 
-| Concern | Choice | Version |
-|---------|--------|---------|
-| Language | Rust | 1.90+ |
-| WASM runtime | wasmtime (Component Model) | 41.x |
-| API contract | WIT (`shepherd:core@0.1.0`) | — |
-| Guest bindings | wit-bindgen | 0.53.x |
-| Async | Tokio | — |
-| Ethereum RPC | alloy | 1.5.x |
-| State store | redb | 3.1.x |
-| Logging | tracing + tracing-subscriber | — |
-| Metrics | metrics + metrics-exporter-prometheus | — |
-| Deployment | Docker | — |
-| License | AGPL-3.0 | — |
+Every module has access to five orthogonal capabilities through the `web3:runtime` WIT package:
 
-## WIT Worlds (API Surface)
+| Primitive | Interface | Purpose | Scope | Backend (Server) |
+|-----------|-----------|---------|-------|-------------------|
+| **Consensus** | `csn` | Read blockchain state via JSON-RPC passthrough | Global (per chain) | alloy Provider |
+| **Local Store** | `local-store` | Per-module key-value persistence | Device-local, per-module | redb |
+| **Remote Store** | `remote-store` | Decentralised content-addressed storage | Global (content-addressed) | Ethereum Swarm |
+| **Messaging** | `msg` | Decentralised pub/sub messaging | Topic-based | Waku |
+| **Logging** | `logging` | Diagnostic output | Per-module | tracing |
+
+These primitives are orthogonal:
+
+- **Consensus** is the source of truth — the blockchain. Modules read chain state and (indirectly) write to it via order submission or transactions.
+- **Local Store** is the module's private scratchpad — fast, local, scoped to one module on one device. Does not replicate.
+- **Remote Store** is shared persistent content — content-addressed, decentralised, survives independent of any device. Any module on any device can read what another module wrote.
+- **Messaging** is real-time communication — ephemeral pub/sub messages between modules, devices, or users. Transient and topic-based.
+- **Logging** is diagnostics — one-way output for debugging and monitoring. Not a data channel.
+
+## WIT Worlds
 
 The WIT is split into layered packages. The universal layer (`web3:runtime`) provides blockchain-agnostic capabilities. Domain extensions (e.g. `shepherd:cow`) add protocol-specific interfaces.
+
+```mermaid
+graph TB
+    subgraph l3["Layer 3 — Domain Extensions"]
+        cow["shepherd:cow\ncow · order"]
+        other["future:domain\nvault · strategy · …"]
+    end
+
+    subgraph l1["Layer 1 — Universal Runtime"]
+        pkg["web3:runtime"]
+        ifaces["csn · local-store · remote-store · msg · logging"]
+        exports["Exports: init · on-event"]
+    end
+
+    cow -->|include headless-module| l1
+    other -->|include headless-module| l1
+```
 
 ```
 // Universal layer — any platform, any blockchain app
@@ -101,12 +122,28 @@ No WASI interfaces are imported. All I/O is mediated through host interfaces. Th
 
 → Full WIT definition: [01-runtime-environment.md](01-runtime-environment.md)
 
+## Technology Stack
+
+| Concern | Choice | Version |
+|---------|--------|---------|
+| Language | Rust | 1.90+ |
+| WASM runtime | wasmtime (Component Model) | 41.x |
+| API contract | WIT (`web3:runtime@0.1.0`, `shepherd:cow@0.1.0`) | — |
+| Guest bindings | wit-bindgen | 0.53.x |
+| Async | Tokio | — |
+| Ethereum RPC | alloy | 1.5.x |
+| Local store | redb | 3.1.x |
+| Logging | tracing + tracing-subscriber | — |
+| Metrics | metrics + metrics-exporter-prometheus | — |
+| Deployment | Docker | — |
+| License | AGPL-3.0 | — |
+
 ## Module Package
 
-A module ships as a **bundle**: a manifest (`shepherd.toml`) plus a compiled WASM component.
+A module ships as a **bundle**: a manifest (`nexum.toml`) plus a compiled WASM component.
 
 ```toml
-# shepherd.toml
+# nexum.toml
 [module]
 name = "twap-monitor"
 version = "0.2.0"
@@ -148,8 +185,20 @@ All methods converge: resolve content reference → fetch via content store → 
 
 ## Module Lifecycle
 
-```
-Resolve → Load → Init → Run ⇄ Restart → Dead
+```mermaid
+stateDiagram-v2
+    [*] --> Resolve: Content hash
+    Resolve --> Load: WASM fetched
+    Resolve --> Dead: Fetch failed
+    Load --> Init: Component compiled
+    Load --> Dead: Invalid world
+    Init --> Run: init OK
+    Init --> Restart: init failed
+    Run --> Run: on_event OK
+    Run --> Restart: Trap / error
+    Restart --> Init: Backoff elapsed
+    Restart --> Dead: N consecutive failures
+    Dead --> [*]
 ```
 
 - **Resolve**: fetch WASM by content hash from Swarm/IPFS/OCI/local.
@@ -163,21 +212,21 @@ Resolve → Load → Init → Run ⇄ Restart → Dead
 
 ## Event System
 
-- **Sources**: `block` (new heads via `eth_subscribe`), `log` (filtered contract events), `cron` (schedule-based).
+- **Sources**: `block` (new heads via `eth_subscribe`), `log` (filtered contract events), `cron` (schedule-based), `message` (Waku content topics).
 - **Shared subscriptions**: one block subscription per chain, fanned out to all subscribed modules.
 - **Dispatch**: concurrent across modules, sequential within a module (ordered delivery).
 - **Declared in manifest**: `[[subscribe]]` blocks — the runtime wires sources, not the module.
 
 → Full design: [02-modules-events-packaging.md](02-modules-events-packaging.md)
 
-## State Store
+## Local Store
 
 - **Backend**: redb (pure Rust, ACID, MVCC, crash-safe).
 - **Isolation**: one database file per module; modules cannot access each other's state.
 - **Transactions**: each `on_event` runs in an implicit write transaction — commit on success, rollback on failure.
 - **Survives restarts**: state is external to WASM instance.
 - **Size enforcement**: `max_state_bytes` from manifest, enforced host-side.
-- **Prefix scanning**: `list_keys(prefix)` for namespaced key organisation.
+- **Prefix scanning**: `list-keys(prefix)` for namespaced key organisation.
 
 → Full design: [04-state-store.md](04-state-store.md)
 
@@ -185,22 +234,22 @@ Resolve → Load → Init → Run ⇄ Restart → Dead
 
 The SDK mirrors the WIT layering: `web3-sdk` (universal) and `shepherd-sdk` (CoW extension, re-exports `web3-sdk`).
 
-| Crate | Layer | Provides |
-|-------|-------|----------|
-| `web3-sdk` | `provider(chain_id)` | Full alloy `Provider` backed by host RPC (via `HostTransport`) |
-| | `TypedState` | Serde-based typed local state (postcard serialisation) |
-| | `RemoteStore` | Typed decentralised storage client (upload, download, feeds) |
-| | `MsgClient` | Typed messaging client (publish, query) |
-| | `abi::sol!` | Compile-time Ethereum ABI codec (alloy-sol-types) |
-| | `log::{info!, …}` | Formatted logging macros |
-| | `Error` / `Result` | Proper error type with `?` support |
-| | `#[web3::module]` | Proc macro for universal modules |
-| `shepherd-sdk` | `CowClient` | Typed CoW Protocol API client backed by host `cow` interface |
-| | `#[shepherd::module]` | Proc macro for CoW modules (extends `#[web3::module]`) |
-| | `prelude::*` | All types, interfaces, helpers in one import |
-| Both | `testing::MockHost` | Native-Rust unit tests with mock host |
-| | `testing::WasmTestHarness` | Integration tests in real wasmtime |
-| | `cargo shepherd` | CLI: new / build / package / publish |
+| Crate | Provides |
+|-------|----------|
+| `web3-sdk` | `provider(chain_id)` — full alloy `Provider` backed by host RPC via `HostTransport` |
+| | `TypedState` — serde-based typed local state (postcard serialisation) |
+| | `RemoteStore` — typed decentralised storage client (upload, download, feeds) |
+| | `MsgClient` — typed messaging client (publish, query) |
+| | `abi::sol!` — compile-time Ethereum ABI codec (alloy-sol-types) |
+| | `log::{info!, …}` — formatted logging macros |
+| | `Error` / `Result` — proper error type with `?` support |
+| | `#[web3::module]` — proc macro for universal modules |
+| `shepherd-sdk` | `CowClient` — typed CoW Protocol API client backed by host `cow` interface |
+| | `#[shepherd::module]` — proc macro for CoW modules (extends `#[web3::module]`) |
+| | `prelude::*` — all types, interfaces, helpers in one import |
+| Both | `testing::MockHost` — native-Rust unit tests with mock host |
+| | `testing::WasmTestHarness` — integration tests in real wasmtime |
+| | `cargo nexum` — CLI: new / build / package / publish |
 
 Multi-language support: module authors can use Rust, C/C++, Go, JavaScript, or Python — all compile to valid components against the same WIT world.
 
@@ -237,14 +286,12 @@ Metrics cover three groups: runtime-level (modules loaded/dead), per-module (eve
 
 The WIT contract is the universal interface — any host that implements it can run modules unchanged. The architecture generalises beyond the server runtime to four platform targets:
 
-| Platform | WASM Engine | State Backend | RPC Backend | Use Case |
-|----------|-------------|---------------|-------------|----------|
+| Platform | WASM Engine | Local Store | RPC Backend | Use Case |
+|----------|-------------|-------------|-------------|----------|
 | **Server** (reference) | wasmtime | redb | alloy provider | Headless automation |
 | **Mobile** (Flutter/Dart) | wasmtime C API / wasm3 | SQLite | HTTP client | On-device automation |
-| **WebView** | Browser engine + `jco` | IndexedDB | JS bridge / wallet | Rich web UIs with blockchain access |
-| **Super app** | All of the above | SQLite | HTTP + wallet | Decentralised mini-program platform |
-
-The universal layer is built on five primitives: `csn` (consensus), `local-store` (local persistence), `remote-store` (decentralised storage via Swarm), `msg` (decentralised messaging via Waku), and `logging`. These form the `web3:runtime` WIT package. Domain extensions like `shepherd:cow` add protocol-specific interfaces. The SDK mirrors this: `web3-sdk` (universal) and `shepherd-sdk` (CoW extension). A module compiled against the universal layer runs on any conforming host.
+| **WebView** | Browser engine + `jco` | IndexedDB | JS bridge / wallet | Rich web UIs |
+| **Super app** | All of the above | SQLite | HTTP + wallet | Decentralised mini-programs |
 
 → Full design: [08-platform-generalisation.md](08-platform-generalisation.md)
 
@@ -252,28 +299,28 @@ The universal layer is built on five primitives: `csn` (consensus), `local-store
 
 | # | Milestone | Effort | Key Deliverables |
 |---|-----------|--------|------------------|
-| 1 | Core Runtime & Event System | 120h | wasmtime Component Model host, WIT interfaces, event sources, redb state store, CLI |
+| 1 | Core Runtime & Event System | 120h | wasmtime Component Model host, WIT interfaces, event sources, redb local store, CLI |
 | 2 | TWAP & Ethflow Modules | 100h | TWAP monitor, Ethflow monitor, ComposableCoW contract mods |
-| 3 | SDK & Developer Experience | 60h | `shepherd-sdk` crate, proc macro, testing framework, examples, docs |
+| 3 | SDK & Developer Experience | 60h | `web3-sdk` + `shepherd-sdk` crates, proc macro, testing framework, examples, docs |
 | 4 | Production Hardening | 60h | Resource limits, restart policy, logging, metrics, health checks |
 | 5 | Multi-Chain & Deployment | 40h | Multi-chain config, Docker image, deployment docs |
 
 ## Repository Structure
 
 ```
-shepherd/
+nexum/
 ├── crates/
-│   ├── runtime/           Core WASM host (server), event system, state store
-│   ├── web3-sdk/          Universal Rust SDK (HostTransport, TypedState, SwarmClient)
-│   ├── shepherd-sdk/      CoW Protocol SDK (CowClient, extends web3-sdk)
-│   ├── cli/               shepherd operator CLI (run, module, state)
-│   └── cargo-shepherd/    cargo subcommand for module authors (new, build, package, publish)
+│   ├── nexum-runtime/      Core WASM host (server), event system, local store
+│   ├── web3-sdk/           Universal Rust SDK (HostTransport, TypedState, RemoteStore, MsgClient)
+│   ├── shepherd-sdk/       CoW Protocol SDK (CowClient, extends web3-sdk)
+│   ├── cli/                nexum operator CLI (run, module, state)
+│   └── cargo-nexum/        cargo subcommand for module authors (new, build, package, publish)
 ├── modules/
-│   ├── twap-monitor/      TWAP order monitoring module
-│   └── ethflow-watcher/   Ethflow order monitoring module
+│   ├── twap-monitor/       TWAP order monitoring module
+│   └── ethflow-watcher/    Ethflow order monitoring module
 ├── wit/
-│   ├── web3-runtime/      Universal WIT package (csn, local-store, remote-store, msg, logging)
-│   └── shepherd-cow/      CoW Protocol WIT package (cow, order, shepherd-module)
+│   ├── web3-runtime/       Universal WIT package (csn, local-store, remote-store, msg, logging)
+│   └── shepherd-cow/       CoW Protocol WIT package (cow, order, shepherd-module)
 ├── docker/
 │   └── Dockerfile
 └── docs/
