@@ -162,8 +162,32 @@ interface csn {
     /// single generic function replaces per-method WIT functions, enabling
     /// the SDK to implement alloy's Transport trait and expose the full
     /// alloy Provider API (80+ methods) to guest modules with zero WIT churn.
+    ///
+    /// Note: signing RPC methods (eth_sendTransaction, eth_accounts,
+    /// eth_signTypedData_v4, personal_sign) are intercepted by the host and
+    /// delegated to the identity backend. The module does not need to handle
+    /// key material directly when using csn for transactions.
     request: func(chain-id: chain-id, method: string, params: string)
         -> result<string, json-rpc-error>;
+}
+
+interface identity {
+    record identity-error {
+        code: u16,
+        message: string,
+    }
+
+    /// Get available signing accounts (20-byte Ethereum addresses).
+    accounts: func() -> result<list<list<u8>>, identity-error>;
+
+    /// Sign raw bytes with the specified account.
+    /// Returns a 65-byte ECDSA secp256k1 signature (r || s || v).
+    /// Extensible to other signing schemes in future versions.
+    sign: func(account: list<u8>, data: list<u8>) -> result<list<u8>, identity-error>;
+
+    /// Sign EIP-712 typed data with the specified account.
+    /// `typed-data` is the JSON-encoded EIP-712 TypedData structure.
+    sign-typed-data: func(account: list<u8>, typed-data: string) -> result<list<u8>, identity-error>;
 }
 
 interface local-store {
@@ -182,6 +206,7 @@ interface logging {
 /// no domain-specific imports. Suitable for any web3 automation.
 world headless-module {
     import csn;
+    import identity;
     import local-store;
     import logging;
 
@@ -243,9 +268,10 @@ world shepherd-module {
 ### Key properties
 
 - **No WASI** — modules cannot access FS, network, clocks, or random.
-- **All I/O through our interfaces** — RPC reads, CoW API, local-store, order submission, logging.
+- **All I/O through our interfaces** — RPC reads, identity/signing, CoW API, local-store, order submission, logging.
 - **Generic JSON-RPC passthrough** — the `csn` interface exposes a single `request` function. The SDK implements alloy's `Transport` trait on top of it, giving modules the full alloy `Provider` API. See doc 07 for details.
-- **`list<u8>` for raw bytes** — local-store values, order payloads, etc. The SDK provides typed wrappers.
+- **Identity as a first-class primitive** — the `identity` interface provides key management and signing. The `csn` host implementation depends on `identity` internally: signing RPC methods (`eth_sendTransaction`, `eth_accounts`, `eth_signTypedData_v4`, `personal_sign`) are intercepted and delegated to the identity backend. Modules can also import `identity` directly for raw signing operations (sign arbitrary messages, get accounts).
+- **`list<u8>` for raw bytes** — local-store values, order payloads, signatures, accounts, etc. The SDK provides typed wrappers.
 - **Resource types** can be added later (e.g. subscription handles, cursor-based log iteration).
 - **Two worlds** — `web3:runtime/headless-module` for platform-agnostic modules; `shepherd:cow/shepherd-module` for CoW Protocol modules that need `cow` and `order` imports.
 
@@ -267,7 +293,25 @@ wasmtime::component::bindgen!({
     world: "shepherd-module",
     async: true,
 });
+```
 
+### Identity Host Trait
+
+The `Identity` trait abstracts key management and signing. Platform implementations vary (server uses keystore/KMS/HSM, mobile uses device keychain, WebView uses wallet extensions), but the trait is uniform:
+
+```rust
+trait Identity {
+    fn accounts(&self) -> Result<Vec<Address>>;
+    fn sign(&self, account: Address, data: &[u8]) -> Result<Signature>;
+    fn sign_typed_data(&self, account: Address, typed_data: &str) -> Result<Signature>;
+}
+```
+
+### Consensus depends on Identity
+
+The `csn` host implementation depends on `Identity` internally. When a module calls a signing RPC method through `csn::request` (e.g. `eth_sendTransaction`, `eth_accounts`, `eth_signTypedData_v4`, `personal_sign`), the host intercepts the call and delegates to the identity backend instead of forwarding to the RPC provider:
+
+```rust
 impl web3::runtime::csn::Host for NexumHostState {
     async fn request(
         &mut self,
@@ -275,6 +319,31 @@ impl web3::runtime::csn::Host for NexumHostState {
         method: String,
         params: String,
     ) -> Result<Result<String, JsonRpcError>> {
+        // Signing methods are intercepted and delegated to identity.
+        match method.as_str() {
+            "eth_accounts" => {
+                let accounts = self.identity.accounts()?;
+                let json = serde_json::to_string(&accounts)?;
+                return Ok(Ok(json));
+            }
+            "eth_sendTransaction" => {
+                // Parse tx, sign via identity, then submit signed tx to provider
+                let tx = serde_json::from_str(&params)?;
+                let signature = self.identity.sign(tx.from, &tx.signing_hash())?;
+                let signed = tx.with_signature(signature);
+                let provider = self.provider_for(chain_id)?;
+                let hash = provider.send_raw_transaction(&signed.encoded()).await?;
+                return Ok(Ok(serde_json::to_string(&hash)?));
+            }
+            "eth_signTypedData_v4" | "personal_sign" => {
+                // Delegate to identity for signing
+                let (account, data) = parse_sign_params(&method, &params)?;
+                let sig = self.identity.sign(account, &data)?;
+                return Ok(Ok(serde_json::to_string(&sig)?));
+            }
+            _ => {}
+        }
+
         if !self.is_method_allowed(&method) {
             return Ok(Err(JsonRpcError {
                 code: -32601,
@@ -294,7 +363,59 @@ impl web3::runtime::csn::Host for NexumHostState {
         }
     }
 }
+```
 
+### Identity Host Implementation
+
+The `identity::Host` implementation delegates to the platform-specific `Identity` trait:
+
+```rust
+impl web3::runtime::identity::Host for NexumHostState {
+    async fn accounts(&mut self) -> Result<Result<Vec<Vec<u8>>, IdentityError>> {
+        match self.identity.accounts() {
+            Ok(addrs) => Ok(Ok(addrs.into_iter().map(|a| a.to_vec()).collect())),
+            Err(e) => Ok(Err(IdentityError {
+                code: 1,
+                message: e.to_string(),
+            })),
+        }
+    }
+
+    async fn sign(
+        &mut self,
+        account: Vec<u8>,
+        data: Vec<u8>,
+    ) -> Result<Result<Vec<u8>, IdentityError>> {
+        let address = Address::from_slice(&account);
+        match self.identity.sign(address, &data) {
+            Ok(sig) => Ok(Ok(sig.to_vec())),
+            Err(e) => Ok(Err(IdentityError {
+                code: 2,
+                message: e.to_string(),
+            })),
+        }
+    }
+
+    async fn sign_typed_data(
+        &mut self,
+        account: Vec<u8>,
+        typed_data: String,
+    ) -> Result<Result<Vec<u8>, IdentityError>> {
+        let address = Address::from_slice(&account);
+        match self.identity.sign_typed_data(address, &typed_data) {
+            Ok(sig) => Ok(Ok(sig.to_vec())),
+            Err(e) => Ok(Err(IdentityError {
+                code: 3,
+                message: e.to_string(),
+            })),
+        }
+    }
+}
+```
+
+### Local Store Host Implementation
+
+```rust
 impl web3::runtime::local_store::Host for NexumHostState {
     async fn get(&mut self, key: String) -> Result<Result<Option<Vec<u8>>, String>> {
         // Read from the in-flight WriteTransaction (not a new ReadTransaction)
@@ -315,14 +436,14 @@ See doc 07 for the full `csn` and `cow` host implementations, method allowlistin
 
 ## Guest-Side (Module Author) Experience
 
-### Universal modules (`web3-sdk`)
+### Universal modules (`nexum-sdk`)
 
-Module authors targeting the universal `headless-module` world add the `web3-sdk` crate and use the `#[web3::module]` proc macro:
+Module authors targeting the universal `headless-module` world add the `nexum-sdk` crate and use the `#[nexum::module]` proc macro. Modules can access identity for signing operations — either indirectly through `csn` (signing RPC methods are handled transparently) or directly via the `identity` interface for raw signing:
 
 ```rust
-use web3_sdk::prelude::*;
+use nexum_sdk::prelude::*;
 
-#[web3::module]
+#[nexum::module]
 struct BlockLogger;
 
 impl BlockLogger {
@@ -475,6 +596,7 @@ The host only adds WASI to the linker for modules that request it — capability
 | Pre-validated module | `InstancePre` (linker + component) |
 | Running instance | `Store<NexumHostState>` + `Instance` |
 | Host API impl | Traits generated by `bindgen!` |
+| Host identity | `Identity` trait (keystore/KMS/HSM on server) |
 | Opaque handles | `Resource<T>` + `ResourceTable` |
 | Per-call budget | Fuel |
 | Wall-clock fairness | Epoch interruption |

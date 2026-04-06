@@ -165,7 +165,7 @@ stateDiagram-v2
 | **Resolve** | Content store resolves `wasm` hash to local path. Fail -> `Dead`. |
 | **Load** | `Component::from_file`, create `InstancePre`. Validates that the component satisfies the target WIT world (`web3:runtime/headless-module` or `shepherd:cow/shepherd-module`). Fail -> `Dead`. |
 | **Init** | Create `Store`, instantiate, call `init(config)` inside an implicit write transaction (same semantics as `on_event` — commit on success, rollback on failure). Module sets up internal state. Fail -> `Restart` (might be transient). |
-| **Run** | Runtime dispatches events to `on_event`. Each call gets a fuel budget. Module processes events and may call host imports (csn, local-store, cow, order). |
+| **Run** | Runtime dispatches events to `on_event`. Each call gets a fuel budget. Module processes events and may call host imports (csn, local-store, identity, cow, order). |
 | **Restart** | After a trap or error. Backoff: 1s -> 2s -> 4s -> ... -> 5min cap. A fresh `Store` is created (clean memory), but **local-store data persists** (it's in redb, external to the WASM instance). |
 | **Dead** | After N consecutive failures (poison pill detection) or explicit operator shutdown. No further event dispatch. Requires manual intervention. |
 
@@ -331,11 +331,19 @@ interface logging {
     log: func(level: level, message: string);
 }
 
+interface identity {
+    record identity-error { code: u16, message: string }
+    accounts: func() -> result<list<list<u8>>, identity-error>;
+    sign: func(account: list<u8>, data: list<u8>) -> result<list<u8>, identity-error>;
+    sign-typed-data: func(account: list<u8>, typed-data: string) -> result<list<u8>, identity-error>;
+}
+
 /// Universal headless module world — platform-agnostic.
 world headless-module {
     import csn;
     import local-store;
     import logging;
+    import identity;
 
     /// Called once on load. Receives config from nexum.toml.
     export init: func(config: types.config) -> result<_, string>;

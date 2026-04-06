@@ -84,14 +84,38 @@ interface csn {
 }
 ```
 
-The `types` interface is unchanged. The `local-store`, `order`, and `logging` interfaces are unchanged.
+The `types` interface is unchanged. The `local-store`, `remote-store`, `msg`, `order`, and `logging` interfaces are unchanged.
 
-The universal `headless-module` world (in `web3:runtime`) contains only the platform-agnostic interfaces:
+The `identity` interface provides cryptographic identity — key management and signing:
+
+```wit
+interface identity {
+    record identity-error {
+        code: u16,
+        message: string,
+    }
+
+    /// Get available signing accounts (20-byte Ethereum addresses).
+    accounts: func() -> result<list<list<u8>>, identity-error>;
+
+    /// Sign raw bytes with the specified account.
+    /// Returns a 65-byte ECDSA secp256k1 signature (r ‖ s ‖ v).
+    sign: func(account: list<u8>, data: list<u8>) -> result<list<u8>, identity-error>;
+
+    /// Sign EIP-712 typed data with the specified account.
+    sign-typed-data: func(account: list<u8>, typed-data: string) -> result<list<u8>, identity-error>;
+}
+```
+
+The universal `headless-module` world (in `web3:runtime`) contains the platform-agnostic interfaces:
 
 ```wit
 world headless-module {
     import csn;          // replaces `import blockchain;`
+    import identity;     // cryptographic identity (key management, signing)
     import local-store;
+    import remote-store;
+    import msg;
     import logging;
 
     export init: func(config: types.config) -> result<_, string>;
@@ -142,8 +166,13 @@ impl web3::runtime::csn::Host for NexumHostState {
         method: String,
         params: String,
     ) -> wasmtime::Result<Result<String, JsonRpcError>> {
-        // 1. Method allowlisting (see section below)
-        if !self.is_method_allowed(&method) {
+        // 1. Check if this is a signing method that requires identity delegation
+        if self.is_signing_method(&method) {
+            return self.dispatch_signing(chain_id, &method, &params).await;
+        }
+
+        // 2. Method allowlisting for read-only methods
+        if !self.is_read_method_allowed(&method) {
             return Ok(Err(JsonRpcError {
                 code: -32601,
                 message: format!("method not allowed: {method}"),
@@ -151,7 +180,7 @@ impl web3::runtime::csn::Host for NexumHostState {
             }));
         }
 
-        // 2. Resolve the provider for this chain
+        // 3. Resolve the provider for this chain
         let provider = self.provider_for(chain_id).map_err(|e| {
             JsonRpcError {
                 code: -32002,
@@ -160,7 +189,7 @@ impl web3::runtime::csn::Host for NexumHostState {
             }
         })?;
 
-        // 3. Parse params as raw JSON and forward to alloy
+        // 4. Parse params as raw JSON and forward to alloy
         let raw_params: Box<RawValue> = RawValue::from_string(params)
             .map_err(|e| wasmtime::Error::msg(format!("invalid JSON params: {e}")))?;
 
@@ -172,15 +201,17 @@ impl web3::runtime::csn::Host for NexumHostState {
 }
 ```
 
-That's it. The alloy provider already has the timeout/retry/rate-limit/fallback tower stack configured per chain (see doc 01). Every `eth_*` method automatically inherits that middleware.
+That's it. The alloy provider already has the timeout/retry/rate-limit/fallback tower stack configured per chain (see doc 01). Every read-only `eth_*` method automatically inherits that middleware.
 
 ### Method Allowlisting
 
-The host maintains an allowlist of methods modules may call. This is a security boundary — modules should not be able to call `eth_sendRawTransaction`, for example.
+The host maintains two categories of methods: **read-only methods** (always allowed through the RPC passthrough) and **signing methods** (delegated to the `identity` backend).
+
+#### Read-Only Methods (RPC Passthrough)
 
 ```rust
 impl NexumHostState {
-    fn is_method_allowed(&self, method: &str) -> bool {
+    fn is_read_method_allowed(&self, method: &str) -> bool {
         // Default allowlist: read-only eth_ methods
         matches!(method,
             "eth_blockNumber"
@@ -218,6 +249,240 @@ extra_allowed_methods = ["eth_createAccessList"]
 ```
 
 The allowlist is runtime-enforced (string matching), not compile-time. This is an acceptable trade-off: the Component Model already provides structural sandboxing (modules can only call `csn::request`, not arbitrary network I/O), and the allowlist adds defence-in-depth for method-level granularity.
+
+#### Signing Methods (Identity Delegation)
+
+When a module calls `csn::request` with a signing method, the host does **not** forward the request to the RPC provider. Instead, it delegates to the `identity` backend for signing, then broadcasts the signed result via RPC.
+
+```rust
+impl NexumHostState {
+    fn is_signing_method(&self, method: &str) -> bool {
+        matches!(method,
+            "eth_sendTransaction"
+            | "eth_accounts"
+            | "eth_signTypedData_v4"
+            | "personal_sign"
+        )
+    }
+}
+```
+
+These methods are deliberately **not** in the read-only allowlist. They follow a completely different code path through the identity backend.
+
+### Identity Delegation Flow
+
+When a module calls a signing method through `csn::request`, the host intercepts it and delegates to the `Identity` trait:
+
+```mermaid
+sequenceDiagram
+    participant M as Module (guest)
+    participant C as CsnHost
+    participant I as Identity backend
+    participant R as RPC provider
+
+    M->>C: csn::request(1, "eth_sendTransaction", params)
+    C->>C: is_signing_method("eth_sendTransaction") → true
+    C->>C: Parse transaction from params
+    C->>I: sign(account, tx_hash)
+    I-->>C: 65-byte signature (r ‖ s ‖ v)
+    C->>C: Assemble signed transaction (RLP-encode with signature)
+    C->>R: eth_sendRawTransaction(signed_tx)
+    R-->>C: tx_hash
+    C-->>M: Ok(tx_hash)
+```
+
+The key insight: modules never call `eth_sendRawTransaction` directly (it's not in the read-only allowlist). Instead, `eth_sendTransaction` is intercepted by the host, which uses the `identity` backend to sign, then broadcasts the signed transaction itself.
+
+This pattern applies to all signing methods:
+
+| Method | Identity Delegation |
+|---|---|
+| `eth_accounts` | Returns accounts from `Identity::accounts()` |
+| `eth_sendTransaction` | Signs the transaction via `Identity::sign()`, broadcasts via `eth_sendRawTransaction` |
+| `eth_signTypedData_v4` | Signs EIP-712 typed data via `Identity::sign_typed_data()` |
+| `personal_sign` | Signs the message via `Identity::sign()` (with EIP-191 prefix) |
+
+### Identity Trait and CsnHost
+
+The host's `csn` implementation is generic over an `Identity` trait. This allows different identity backends (hardware wallet, KMS, in-memory test keys, etc.):
+
+```rust
+/// Trait for identity backends that provide signing capabilities.
+///
+/// The host's csn implementation delegates signing methods to this trait.
+/// Implementations can back onto hardware wallets, cloud KMS, in-memory
+/// test keys, or any other signing infrastructure.
+pub trait Identity: Send + Sync {
+    /// Get available signing accounts (20-byte Ethereum addresses).
+    fn accounts(&self) -> Result<Vec<Vec<u8>>, IdentityError>;
+
+    /// Sign raw bytes with the specified account.
+    /// Returns a 65-byte ECDSA secp256k1 signature (r ‖ s ‖ v).
+    fn sign(&self, account: &[u8], data: &[u8]) -> Result<Vec<u8>, IdentityError>;
+
+    /// Sign EIP-712 typed data with the specified account.
+    fn sign_typed_data(&self, account: &[u8], typed_data: &str) -> Result<Vec<u8>, IdentityError>;
+}
+
+/// The host state is generic over the identity backend.
+pub struct CsnHost<I: Identity> {
+    providers: HashMap<u64, RootProvider>,
+    identity: I,
+}
+
+impl<I: Identity> web3::runtime::csn::Host for CsnHost<I> {
+    async fn request(
+        &mut self,
+        chain_id: u64,
+        method: String,
+        params: String,
+    ) -> wasmtime::Result<Result<String, JsonRpcError>> {
+        if self.is_signing_method(&method) {
+            return self.dispatch_signing(chain_id, &method, &params).await;
+        }
+
+        if !self.is_read_method_allowed(&method) {
+            return Ok(Err(JsonRpcError {
+                code: -32601,
+                message: format!("method not allowed: {method}"),
+                data: None,
+            }));
+        }
+
+        let provider = self.provider_for(chain_id)?;
+        let raw_params: Box<RawValue> = RawValue::from_string(params)
+            .map_err(|e| wasmtime::Error::msg(format!("invalid JSON params: {e}")))?;
+
+        match provider.raw_request_dyn(method.into(), &raw_params).await {
+            Ok(result) => Ok(Ok(result.get().to_string())),
+            Err(e) => Ok(Err(e.into())),
+        }
+    }
+}
+
+impl<I: Identity> CsnHost<I> {
+    /// Dispatch signing methods to the identity backend.
+    async fn dispatch_signing(
+        &self,
+        chain_id: u64,
+        method: &str,
+        params: &str,
+    ) -> wasmtime::Result<Result<String, JsonRpcError>> {
+        match method {
+            "eth_accounts" => {
+                let accounts = self.identity.accounts().map_err(|e| JsonRpcError {
+                    code: -32000,
+                    message: e.message,
+                    data: None,
+                })?;
+                let hex_accounts: Vec<String> = accounts
+                    .iter()
+                    .map(|a| format!("0x{}", hex::encode(a)))
+                    .collect();
+                Ok(Ok(serde_json::to_string(&hex_accounts)?))
+            }
+
+            "eth_sendTransaction" => {
+                let provider = self.provider_for(chain_id)?;
+                // Parse the transaction params
+                let tx_params: Vec<serde_json::Value> = serde_json::from_str(params)?;
+                let tx = &tx_params[0];
+
+                let from = parse_address(tx.get("from"))?;
+
+                // Fill missing fields (nonce, gas, etc.) via the provider
+                let filled_tx = self.fill_transaction(provider, tx).await?;
+
+                // Hash the transaction and sign it
+                let tx_hash = filled_tx.signing_hash();
+                let signature = self.identity.sign(&from, tx_hash.as_ref())
+                    .map_err(|e| JsonRpcError {
+                        code: -32000,
+                        message: e.message,
+                        data: None,
+                    })?;
+
+                // Assemble signed transaction and broadcast
+                let signed_tx = filled_tx.with_signature(&signature);
+                let raw_tx = signed_tx.rlp_encode();
+
+                let raw_params = serde_json::to_string(&[format!("0x{}", hex::encode(&raw_tx))])?;
+                let raw_params_box: Box<RawValue> = RawValue::from_string(raw_params)?;
+                match provider.raw_request_dyn("eth_sendRawTransaction".into(), &raw_params_box).await {
+                    Ok(result) => Ok(Ok(result.get().to_string())),
+                    Err(e) => Ok(Err(e.into())),
+                }
+            }
+
+            "eth_signTypedData_v4" => {
+                let params_arr: Vec<serde_json::Value> = serde_json::from_str(params)?;
+                let account = parse_address(&params_arr[0])?;
+                let typed_data = params_arr[1].to_string();
+
+                let signature = self.identity.sign_typed_data(&account, &typed_data)
+                    .map_err(|e| JsonRpcError {
+                        code: -32000,
+                        message: e.message,
+                        data: None,
+                    })?;
+                Ok(Ok(format!("\"0x{}\"", hex::encode(&signature))))
+            }
+
+            "personal_sign" => {
+                let params_arr: Vec<serde_json::Value> = serde_json::from_str(params)?;
+                let data = parse_hex_bytes(&params_arr[0])?;
+                let account = parse_address(&params_arr[1])?;
+
+                // EIP-191 prefix
+                let prefixed = format!("\x19Ethereum Signed Message:\n{}", data.len());
+                let mut msg = prefixed.into_bytes();
+                msg.extend_from_slice(&data);
+                let hash = keccak256(&msg);
+
+                let signature = self.identity.sign(&account, &hash)
+                    .map_err(|e| JsonRpcError {
+                        code: -32000,
+                        message: e.message,
+                        data: None,
+                    })?;
+                Ok(Ok(format!("\"0x{}\"", hex::encode(&signature))))
+            }
+
+            _ => Ok(Err(JsonRpcError {
+                code: -32601,
+                message: format!("unknown signing method: {method}"),
+                data: None,
+            })),
+        }
+    }
+}
+```
+
+The `CsnHost` also implements `web3::runtime::identity::Host` directly, delegating to the same `Identity` trait so modules can use the identity WIT interface for raw signing:
+
+```rust
+impl<I: Identity> web3::runtime::identity::Host for CsnHost<I> {
+    fn accounts(&mut self) -> wasmtime::Result<Result<Vec<Vec<u8>>, IdentityError>> {
+        Ok(self.identity.accounts())
+    }
+
+    fn sign(
+        &mut self,
+        account: Vec<u8>,
+        data: Vec<u8>,
+    ) -> wasmtime::Result<Result<Vec<u8>, IdentityError>> {
+        Ok(self.identity.sign(&account, &data))
+    }
+
+    fn sign_typed_data(
+        &mut self,
+        account: Vec<u8>,
+        typed_data: String,
+    ) -> wasmtime::Result<Result<Vec<u8>, IdentityError>> {
+        Ok(self.identity.sign_typed_data(&account, &typed_data))
+    }
+}
+```
 
 ## Guest SDK: `HostTransport`
 
@@ -353,7 +618,7 @@ use alloy_rpc_client::RpcClient;
 /// the host's RPC stack (timeout, retry, rate-limit, failover).
 ///
 /// ```rust
-/// let provider = web3_sdk::provider(42161);
+/// let provider = nexum_sdk::provider(42161);
 /// let block = provider.get_block_number().await?;
 /// ```
 pub fn provider(chain_id: u64) -> RootProvider {
@@ -378,7 +643,7 @@ This is verbose and obscures the actual logic. But we can't reimplement every `P
 
 ### The Solution: Named Event Handlers + `async fn`
 
-The proc macro (see doc 05) already generates the WIT export boilerplate. We extend it in two ways. For universal modules, the `#[web3::module]` macro is used; for CoW modules, the `#[shepherd::module]` macro (which extends the universal one with CoW-specific imports):
+The proc macro (see doc 05) already generates the WIT export boilerplate. We extend it in two ways. For universal modules, the `#[nexum::module]` macro is used; for CoW modules, the `#[shepherd::module]` macro (which extends the universal one with CoW-specific imports):
 
 1. **Named event handlers** — instead of writing the `match event { ... }` dispatch manually, module authors implement `on_block`, `on_logs`, and/or `on_timer`. The macro generates the `on_event` match.
 2. **`async fn` support** — handlers can be async. The macro wraps the generated `on_event` in `block_on()`, so `.await` works naturally.
@@ -387,7 +652,7 @@ The proc macro (see doc 05) already generates the WIT export boilerplate. We ext
 **What the module author writes (universal module):**
 
 ```rust
-#[web3::module]
+#[nexum::module]
 struct MyModule;
 
 impl MyModule {
@@ -429,14 +694,14 @@ impl MyModule {
 ```rust
 impl Guest for MyModule {
     fn on_event(event: types::Event) -> Result<(), String> {
-        web3_sdk::block_on(async {
+        nexum_sdk::block_on(async {
             match event {
                 Event::Block(block) => {
-                    let provider = web3_sdk::provider(block.chain_id);
+                    let provider = nexum_sdk::provider(block.chain_id);
                     MyModule::on_block(block, &provider).await
                 }
                 Event::Logs(logs) => {
-                    let provider = web3_sdk::provider(logs[0].chain_id);
+                    let provider = nexum_sdk::provider(logs[0].chain_id);
                     MyModule::on_logs(logs, &provider).await
                 }
                 Event::Timer(_) => Ok(()),  // no handler defined
@@ -457,7 +722,7 @@ The generated code calls `block_on` exactly once — at the top-level export bou
 | `on_timer(timestamp)` | `u64` | None (no chain context) |
 
 The macro inspects each handler's signature:
-- **Second parameter is `&RootProvider`** -> inject `web3_sdk::provider(chain_id)`
+- **Second parameter is `&RootProvider`** -> inject `nexum_sdk::provider(chain_id)`
 - **No second parameter** -> pass only the payload
 - **Async handlers** -> wrapped in `block_on`; sync handlers called directly
 - **Missing handlers** -> `Ok(())` for that variant (no-op)
@@ -513,14 +778,14 @@ The named handler + async macro approach eliminates boilerplate at both the even
 ### Before (Per-Method WIT)
 
 ```rust
-use web3_sdk::prelude::*;
-use web3_sdk::abi::sol;
+use nexum_sdk::prelude::*;
+use nexum_sdk::abi::sol;
 
 sol! {
     function balanceOf(address owner) view returns (uint256);
 }
 
-#[web3::module]
+#[nexum::module]
 struct MyModule;
 
 impl MyModule {
@@ -550,13 +815,13 @@ impl MyModule {
 ### After (Generic RPC + named handlers + provider injection)
 
 ```rust
-use web3_sdk::prelude::*;
+use nexum_sdk::prelude::*;
 
 sol! {
     function balanceOf(address owner) view returns (uint256);
 }
 
-#[web3::module]
+#[nexum::module]
 struct MyModule;
 
 impl MyModule {
@@ -777,33 +1042,34 @@ async fn on_block(block: BlockData, provider: &RootProvider) -> Result<()> {
 ## Updated SDK Crate Structure
 
 ```
-web3-sdk/
+nexum-sdk/
 ├── Cargo.toml
 ├── src/
 │   ├── lib.rs               # re-exports, prelude, provider() constructor
 │   ├── bindings.rs           # generated WIT bindings
 │   ├── transport.rs          # HostTransport (alloy Transport impl)
 │   ├── local_store.rs        # TypedState helpers (serde over local-store)
+│   ├── identity.rs           # IdentityClient (typed identity helpers)
 │   ├── abi.rs                # alloy-sol-types integration
 │   ├── log.rs                # logging macros
 │   ├── error.rs              # error types
 │   └── testing.rs            # mock host, test harness
 └── macros/
     └── src/
-        └── lib.rs            # #[web3::module] proc macro
+        └── lib.rs            # #[nexum::module] proc macro
 
 shepherd-sdk/
-├── Cargo.toml                # depends on web3-sdk, re-exports it
+├── Cargo.toml                # depends on nexum-sdk, re-exports it
 ├── src/
-│   ├── lib.rs                # re-exports web3-sdk + CoW additions
+│   ├── lib.rs                # re-exports nexum-sdk + CoW additions
 │   ├── cow.rs                # CowClient typed wrapper
 │   └── order.rs              # order submission helpers
 └── macros/
     └── src/
-        └── lib.rs            # #[shepherd::module] proc macro (extends web3::module)
+        └── lib.rs            # #[shepherd::module] proc macro (extends nexum::module)
 ```
 
-New dependencies (in `web3-sdk`):
+New dependencies (in `nexum-sdk`):
 
 ```toml
 [dependencies]
@@ -825,13 +1091,17 @@ All alloy crates with `default-features = false` to avoid pulling in reqwest, to
 ## Updated Prelude
 
 ```rust
-// web3_sdk::prelude
+// nexum_sdk::prelude
 pub use crate::bindings::web3::runtime::types::*;
 pub use crate::bindings::web3::runtime::csn;
+pub use crate::bindings::web3::runtime::identity;
 pub use crate::bindings::web3::runtime::local_store;
+pub use crate::bindings::web3::runtime::remote_store;
+pub use crate::bindings::web3::runtime::msg;
 pub use crate::bindings::web3::runtime::logging;
 pub use crate::log::{trace, debug, info, warn, error};
 pub use crate::local_store::TypedState;
+pub use crate::identity::IdentityClient;
 pub use crate::transport::HostTransport;
 pub use crate::{provider, block_on};
 pub use crate::error::{Result, Error};
@@ -844,8 +1114,8 @@ pub use alloy_provider::Provider;
 ```
 
 ```rust
-// shepherd_sdk::prelude (re-exports web3_sdk::prelude + CoW additions)
-pub use web3_sdk::prelude::*;
+// shepherd_sdk::prelude (re-exports nexum_sdk::prelude + CoW additions)
+pub use nexum_sdk::prelude::*;
 pub use crate::bindings::shepherd::cow::cow;
 pub use crate::bindings::shepherd::cow::order;
 pub use crate::cow::CowClient;
@@ -858,7 +1128,7 @@ pub use crate::cow::CowClient;
 The SDK testing module provides a mock transport that mirrors alloy's own `Asserter`-based testing pattern:
 
 ```rust
-use web3_sdk::testing::MockProvider;
+use nexum_sdk::testing::MockProvider;
 
 #[test]
 fn test_reads_balance() {
@@ -936,9 +1206,9 @@ If starting from scratch (recommended): implement `csn` only. Skip `blockchain` 
 
 | Component | What Changes |
 |---|---|
-| **WIT** | Replace `blockchain` with `csn` (1 function). Add `cow` interface in `shepherd:cow`. |
-| **Host** | One `csn::request` impl forwarding to `provider.raw_request_dyn`. One `cow::request` impl forwarding to HTTP client. |
-| **SDK** | `web3-sdk`: `HostTransport` (alloy `Transport` impl), `provider()` constructor, `block_on()`. `shepherd-sdk`: `CowClient`, order helpers (extends `web3-sdk`). |
-| **`#[web3::module]` / `#[shepherd::module]` macros** | Named event handlers (`on_block`, `on_logs`, `on_timer`) with generated match dispatch. `async fn` support. Optional `&RootProvider` injection. `#[web3::module]` for universal modules; `#[shepherd::module]` for CoW modules. |
-| **Module author experience** | Full alloy `Provider` API via injected provider. Full CoW API via `CowClient`. No match boilerplate. No `block_on`. No manual ABI wrangling for RPC calls. |
+| **WIT** | Replace `blockchain` with `csn` (1 function). Add `identity` interface (accounts, sign, sign-typed-data). Add `cow` interface in `shepherd:cow`. `headless-module` imports 6 interfaces: csn, identity, local-store, remote-store, msg, logging. |
+| **Host** | `CsnHost<I: Identity>` — one `csn::request` impl that forwards read-only methods to `provider.raw_request_dyn` and delegates signing methods (`eth_sendTransaction`, `eth_accounts`, `eth_signTypedData_v4`, `personal_sign`) to the `Identity` backend. One `identity::Host` impl delegating to the same backend. One `cow::request` impl forwarding to HTTP client. |
+| **SDK** | `nexum-sdk`: `HostTransport` (alloy `Transport` impl), `provider()` constructor, `block_on()`, `IdentityClient` (typed identity wrapper). `shepherd-sdk`: `CowClient`, order helpers (extends `nexum-sdk`). |
+| **`#[nexum::module]` / `#[shepherd::module]` macros** | Named event handlers (`on_block`, `on_logs`, `on_timer`) with generated match dispatch. `async fn` support. Optional `&RootProvider` injection. `#[nexum::module]` for universal modules; `#[shepherd::module]` for CoW modules. |
+| **Module author experience** | Full alloy `Provider` API via injected provider. Signing via `IdentityClient` or transparently through `csn::request` signing methods. Full CoW API via `CowClient`. No match boilerplate. No `block_on`. No manual ABI wrangling for RPC calls. |
 | **Existing ABI helpers** | Unchanged — `sol!` macro and `alloy-sol-types` still used for contract calldata encoding/decoding. |

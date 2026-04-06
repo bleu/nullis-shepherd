@@ -322,6 +322,13 @@ The `metrics` crate provides a facade (like `log` for logging). We use `metrics-
 | `nexum_subscription_reconnects_total` | Counter | `chain_id` | Subscription reconnection count |
 | `nexum_blocks_behind` | Gauge | `chain_id` | Blocks behind head (0 = caught up) |
 
+#### Identity
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `nexum_identity_sign_total` | Counter | `module`, `account` | Signing operations performed |
+| `nexum_identity_errors_total` | Counter | `module`, `error_code` | Identity operation failures |
+
 ### Exposition
 
 ```toml
@@ -404,6 +411,7 @@ The runtime itself doesn't send alerts -- it exposes metrics and health for exte
 | Chain falling behind | Warning | `nexum_blocks_behind > 10` |
 | State store near quota | Warning | `nexum_state_bytes_used / nexum_state_bytes_limit > 0.9` |
 | Subscription reconnect storm | Warning | `rate(nexum_subscription_reconnects_total[5m]) > 1` |
+| Identity signing failures | Warning | `rate(nexum_identity_errors_total[5m]) > 0.5` |
 
 ## Runtime Configuration Summary
 
