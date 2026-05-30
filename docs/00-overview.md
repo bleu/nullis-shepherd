@@ -315,7 +315,7 @@ The WIT contract is the universal interface — any host that implements it can 
 ```
 nexum/
 ├── crates/
-│   ├── nexum-runtime/      Core WASM host (server), event system, local store
+│   ├── nxm-engine/      Core WASM host (server), event system, local store
 │   ├── nexum-sdk/          Universal Rust SDK (HostTransport, Identity, TypedState, RemoteStore, MsgClient)
 │   ├── shepherd-sdk/       CoW Protocol SDK (CowClient, extends nexum-sdk)
 │   ├── cli/                nexum operator CLI (run, module, state)

@@ -1,6 +1,6 @@
 [workspace]
 members = [
-    "crates/nexum-runtime",
+    "crates/nxm-engine",
     "modules/example",
 ]
 resolver = "2"

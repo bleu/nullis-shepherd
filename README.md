@@ -20,7 +20,7 @@ A module compiled against the universal `web3:runtime/headless-module` world run
 
 | Path | Purpose |
 | --- | --- |
-| `crates/nexum-runtime/` | Host runtime — wasmtime-based component loader and host implementations. |
+| `crates/nxm-engine/` | Host runtime — wasmtime-based component loader and host implementations. |
 | `modules/example/` | Reference guest module demonstrating the module ABI. |
 | `wit/web3-runtime/` | Universal `web3:runtime` WIT package (csn, identity, local-store, remote-store, msg, logging). |
 | `wit/shepherd-cow/` | `shepherd:cow` WIT package — CoW Protocol-specific extensions. |

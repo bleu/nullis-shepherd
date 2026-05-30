@@ -5,7 +5,7 @@ sync-wit:
 
 # Build the host runtime
 build-runtime: sync-wit
-    cargo build -p nexum-runtime
+    cargo build -p nxm-engine
 
 # Build the example WASM module
 build-module:
@@ -16,9 +16,9 @@ build: build-runtime build-module
 
 # Build the module then run the runtime with it
 run: build-module build-runtime
-    cargo run -p nexum-runtime -- target/wasm32-wasip2/release/example.wasm
+    cargo run -p nxm-engine -- target/wasm32-wasip2/release/example.wasm
 
 # Check the entire workspace
 check: sync-wit
     cargo check --target wasm32-wasip2 -p example
-    cargo check -p nexum-runtime
+    cargo check -p nxm-engine
