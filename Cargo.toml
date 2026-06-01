@@ -67,8 +67,11 @@ alloy-transport-ws = { version = "1.5", default-features = false }
 
 # CoW Protocol bindings. Pinned to one version across the workspace
 # (was `1.0.0-alpha` in engine vs `1.0.0-alpha.3` in SDK before
-# hoisting).
-cowprotocol = { version = "1.0.0-alpha.3", default-features = false }
+# hoisting). Default features stay on so the engine picks up
+# `http-client` for `OrderBookApi`; guest-side consumers (SDK,
+# strategies) opt out with `default-features = false` for the
+# `cdylib` wasm-target builds.
+cowprotocol = "1.0.0-alpha.3"
 
 # HTTP transport for `cow_api::request` REST passthrough and the
 # orderbook-mock test surface.
