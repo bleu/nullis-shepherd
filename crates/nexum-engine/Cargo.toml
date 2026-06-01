@@ -42,9 +42,11 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 # alloy's JSON-RPC layer without reimplementing the codec.
 alloy-provider      = { version = "1.5", default-features = false, features = ["ws", "ipc", "pubsub", "reqwest"] }
 alloy-rpc-client    = { version = "1.5", default-features = false }
+alloy-rpc-types-eth = { version = "1.5", default-features = false, features = ["std"] }
 alloy-transport     = { version = "1.5", default-features = false }
 alloy-transport-ws  = { version = "1.5", default-features = false }
 alloy-primitives    = { version = "1.5", default-features = false, features = ["std", "serde"] }
+futures             = "0.3"
 
 # `local-store` backend. Per-module namespacing is enforced
 # host-side via a `[len:u8][module_name][raw_key]` prefix.
