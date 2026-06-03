@@ -31,5 +31,5 @@ Add a workspace-level `[patch.crates-io]` redirecting `cowprotocol` to `https://
 
 - `cargo update` will re-resolve to the same `rev` — the lock pins it.
 - Bumping the rev is a single-line workspace edit; reviewers see one diff.
-- Drop the patch entirely once a published `cowprotocol` release contains both the alpha.3 follow-ups and the ADR-0007 protocol-helper additions (`composable::poll_and_build_order`, `eth_flow::decode_placement`, `app_data::OrderBookAppDataResolver`). Until then, expect the patch rev to advance with every cow-rs merge that the engine consumes.
+- Drop the patch entirely once a published `cowprotocol` release contains both the alpha.3 follow-ups and the ADR-0007 protocol-helper additions (`composable::poll_and_build_order`, `eth_flow::decode_placement`, `OrderPostError` rich variants). Until then, expect the patch rev to advance with every cow-rs merge that the engine consumes.
 - Modules built against this workspace inherit the patch transitively; modules built standalone against crates.io will see `alpha.3` and may hit the very bugs the patch closes — flag in the SDK README when M3 lands.
