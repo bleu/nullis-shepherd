@@ -6,15 +6,15 @@ status: proposed
 
 ## Context
 
-Implementing ADR-0006 (twap + ethflow host helpers) and ADR-0005 (cow-api backend) surfaces a recurring question: when the engine needs a piece of CoW Protocol logic that the `cowprotocol` Rust SDK does not yet expose (TWAP polling glue, EthFlow log decoding, rich orderbook error variants, custom orderbook URLs), do we write that logic locally in `nexum-engine` and tidy it up upstream later, or do we open the cow-rs PR first and only land the engine wiring afterwards?
+Implementing ADR-0006 (twap + ethflow host helpers) and ADR-0005 (cow-api backend) surfaces a recurring question: when the engine needs a piece of CoW Protocol logic that the `cowprotocol` Rust SDK does not yet expose (TWAP polling glue, EthFlow log decoding, rich orderbook error variants, custom orderbook URLs), do we write that logic locally in `nexum-engine` and tidy it up upstream later, or do we add it to the open upstream PR first and only land the engine wiring afterwards?
 
-mfw78's review of cow-rs PR #5 named the failure mode explicitly: duplicating work that an existing crate could do is the AI-coding anti-pattern most likely to land in a Bleu PR. The same risk applies to any engine-side reimplementation of protocol logic.
+Review feedback on cow-rs PR #5 named the failure mode explicitly: duplicating work that an existing crate could do is the AI-coding anti-pattern most likely to land in a contribution. The same risk applies to any engine-side reimplementation of protocol logic.
 
-CoW's broader architecture has been moving the same direction: `watch-tower` extracted from `cowprotocol/services` autopilot, the `refunder` crate likewise, with the `ethflow_events` indexer (`crates/autopilot/src/database/onchain_order_events/ethflow_events.rs`) identified as the next extraction target. The Rust-side equivalent of those extractions is the right home for protocol primitives — `bleu/cow-rs` (then upstream into `cowdao-grants/cow-rs`), not the engine.
+CoW maintainers have signalled intent to keep extracting services from the `cowprotocol/services` monolith: `watch-tower` is already extracted, the `refunder` crate likewise, and the `ethflow_events` indexer (`crates/autopilot/src/database/onchain_order_events/ethflow_events.rs`) is the next extraction target. The Rust SDK that Bleu is delivering through PR #5 is the natural home for the protocol primitives those extractions need.
 
 ## Decision
 
-Protocol-level CoW logic — anything that an indexer, a bot, or a non-`nexum` Rust consumer of CoW Protocol would also need — lands in `bleu/cow-rs` first as an upstream PR, and is consumed by `nexum-engine` via the existing `[patch.crates-io]` rev bump (ADR-0004). The engine never writes throwaway local copies of the same logic with the intent to "port later".
+Protocol-level CoW logic, meaning anything that an indexer, a bot, or a non-`nexum` Rust consumer of CoW Protocol would also need, lands as additional commits on `cowdao-grants/cow-rs` PR #5 first (head branch `bleu/cow-rs:main`), and is consumed by `nexum-engine` via the `[patch.crates-io]` rev bump (ADR-0004). The engine never writes throwaway local copies of the same logic with the intent to "port later".
 
 The concrete set of primitives we know we need is, in priority order:
 
@@ -32,17 +32,16 @@ Lower-priority follow-ons (`OrderUid::from_slice`, retry middleware on `OrderBoo
 
 ## Considered options
 
-- **Implement locally, refactor upstream later.** Faster short term but predictably leaves an indeterminate amount of duplicated logic in the engine, contradicts mfw78's stated conventions, and grows technical debt every time cow-rs evolves the underlying types. Rejected.
+- **Implement locally, refactor upstream later.** Faster short term but predictably leaves an indeterminate amount of duplicated logic in the engine, contradicts the conventions established on cow-rs PR #5, and grows technical debt every time cow-rs evolves the underlying types. Rejected.
 - **Wait for cow-rs upstream maintainers to add these on their own.** No evidence anyone else is doing this work; the grant timeline does not permit waiting.
 - **Vendor a fork of cow-rs inside `nullislabs/shepherd`.** Worst of all worlds: blocks neither the engine nor cow-rs from drifting, and forces every other CoW consumer to re-derive the same primitives.
 - **Simple `Ready/NotReady` PollOutcome on item 1.** Rejected: doesn't capture watchtower's `TRY_AT_EPOCH(t)` hint, which is what prevents the polling loop from RPC-spamming during the 1-hour gap between TWAP parts.
 
 ## Consequences
 
-- Every M2 engine issue that consumes one of the five primitives above is blocked on its cow-rs PR merging. We sequence issues so that upstream PRs and engine adoption can land in parallel where possible (e.g., open items 1, 2, 3 against `bleu/cow-rs` simultaneously rather than serially).
-- `[patch.crates-io]` rev in the workspace `Cargo.toml` (ADR-0004) is bumped after each cow-rs merge; the bump is the engine's signal that a new primitive is consumable.
-- PRs in `bleu/cow-rs` follow the existing mfw78 conventions established by cow-rs PR #5: severity-tagged reviews, alloy reuse over local reimplementation, GPL-3.0, edition 2024, terse rustdoc.
-- After acceptance in `bleu/cow-rs`, each primitive is also surfaced as a PR (or backport) against `cowdao-grants/cow-rs` so the wider ecosystem benefits and the bleu fork narrows over time.
-- The engine repo stays small: `nexum-engine` contains WIT, host wiring, supervisor, redb store, alloy provider pool, and `engine.toml` schema — nothing about CoW Protocol semantics.
-- The rich `PollOutcome` (item 1) + `OrderPostError` + `retry_hint` (item 3) design naturally leads to tighter M3 SDK helpers: `WatchSet`, `PollLoop`, `BackoffLedger` patterns that any module re-using `shepherd-sdk` gets for free.
-- A follow-on Bleu module — the Rust-side equivalent of `cowprotocol/refunder` (permissionless `invalidateOrder` triggering for expired EthFlow orders) — becomes natural to ship once `ethflow.submit-from-log` lands. Out of scope for M2 but explicitly enabled by the same primitives.
+- Every M2 engine issue that consumes one of the five primitives above is blocked on the corresponding commit landing in PR #5's head branch. Items 1, 2, 3 can be authored as independent commits and pushed in parallel rather than serially.
+- `[patch.crates-io]` rev in the workspace `Cargo.toml` (ADR-0004) is bumped after each push to PR #5; the bump is the engine's signal that a new primitive is consumable.
+- Commits added to PR #5 follow the conventions established by its review thread: severity-tagged review notes, alloy reuse over local reimplementation, GPL-3.0, edition 2024, terse rustdoc.
+- The engine repo stays small: `nexum-engine` contains WIT, host wiring, supervisor, redb store, alloy provider pool, and `engine.toml` schema, with nothing about CoW Protocol semantics.
+- The rich `PollOutcome` (item 1) plus `OrderPostError` and `retry_hint` (item 3) design naturally leads to tighter M3 SDK helpers: `WatchSet`, `PollLoop`, `BackoffLedger` patterns that any module re-using `shepherd-sdk` gets for free.
+- A follow-on Bleu module, the Rust-side equivalent of `cowprotocol/refunder` (permissionless `invalidateOrder` triggering for expired EthFlow orders), becomes natural to ship once `ethflow.submit-from-log` lands. Out of scope for M2 but explicitly enabled by the same primitives.
