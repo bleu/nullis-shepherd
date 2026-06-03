@@ -26,8 +26,7 @@ Chains not in `cowprotocol::Chain` return `HostError { kind: unsupported }` at t
 
 ## Consequences
 
-- Operator-supplied custom orderbook URLs (barn, staging, forked deployments) are out of scope for the default constructor and require a follow-on `OrderBookApi::with_base_url(chain_id, base_url)` constructor in the cow-rs crate (ADR-0007, upstream item 4 — not vendored locally).
-- App-data resolution moves out of the engine entirely once ADR-0007 item 3 lands: `OrderBookPool` exposes an `AppDataResolver` constructed from the same per-chain `OrderBookApi` clients, and both `cow-api` call sites and the new twap/ethflow helpers (ADR-0001) consume that shared resolver. No engine-side LRU.
+- Operator-supplied custom orderbook URLs (barn, staging, forked deployments) are out of scope for the default constructor and require a follow-on `OrderBookApi::with_base_url(chain_id, base_url)` constructor in the cow-rs crate (ADR-0007 item 4 — not vendored locally).
 - Adding a chain means a `cowprotocol::Chain` variant lands in cow-rs first; the engine inherits it on the next patched rev bump.
 - The shared `reqwest::Client` enables connection pooling across both `request` and `submit-order` paths.
-- TWAP and EthFlow helpers (ADR-0001) reuse the same pool — no duplicated client construction in those host wrappers.
+- TWAP and EthFlow helpers (ADR-0006) reuse the same pool — no duplicated client construction in those host wrappers.
