@@ -2,85 +2,48 @@
 status: proposed
 ---
 
-# TWAP and EthFlow as intent helpers in `shepherd:cow@0.2.0`
+# TWAP and EthFlow run as guest modules using low-level host primitives (no specialised `shepherd:cow` interfaces)
 
 ## Context
 
-The reference engine already exposes `shepherd:cow/cow-api` for raw orderbook access (REST passthrough + `submit-order`). Two further CoW workflows show up in every non-trivial module: ComposableCoW conditional orders (TWAP being the canonical example) and EthFlow native-ETH orders. Both follow the same external-indexer/relayer pattern that CoW maintainers have signalled intent to extract from the monolithic `cowprotocol/services` repository:
+TWAP (over ComposableCoW) and EthFlow are the two CoW workflows the M2 grant ships modules for. The natural-seeming approach is to add `shepherd:cow/twap` and `shepherd:cow/ethflow` WIT interfaces that the host implements on top of `cowprotocol` crate primitives, so modules would call `twap.poll-and-submit(...)` and `ethflow.submit-from-log(...)` as host functions. This ADR rejects that direction.
 
-- **TWAP / ComposableCoW** is already extracted as the standalone `cowprotocol/watch-tower` (TypeScript). Listens to `ConditionalOrderCreated`, polls `getTradeableOrderWithSignature` on each block, posts to the orderbook when an order becomes tradeable.
-- **EthFlow indexer** still lives inside `cowprotocol/services/crates/autopilot/src/database/onchain_order_events/ethflow_events.rs`. Listens to `OrderPlacement` / `OrderInvalidation` / `OrderRefund`, inserts into the `ethflow_orders` table. The intent is to extract it into a standalone service following the same path `watch-tower` and the `refunder` crate already took. The Shepherd `ethflow-watcher` module is positioned as that extraction.
+The dividing line is protocol vs implementation. CoW Protocol primitives — order types, signing schemes, the orderbook REST surface — are protocol concerns and belong in shared layers (`cowprotocol` crate, `shepherd:cow/cow-api` interface). TWAP is one of many strategies built _on top of_ those primitives; ComposableCoW is the contract surface a TWAP module observes, but the act of polling, deciding when to submit, and reacting to orderbook errors is application logic. Putting that application logic in the host or in `cowprotocol` couples every consumer to one implementation and one error-handling policy.
 
-Both flows share the same pattern: observe an on-chain event, derive a signed `OrderCreation`, submit it to the orderbook. The derivation has enough protocol detail (signing scheme, ComposableCoW eth_call, EthFlow EIP-1271 contract signature, log decoding) that a guest module would either ship that logic itself (large WASM, duplicates work in the `cowprotocol` Rust SDK) or make ten round-trips to the host through generic `chain`/`cow-api` calls.
-
-Per ADR-0007, the protocol logic itself lives in the `cowprotocol` crate, not in `nexum-engine`. This ADR consequently scopes the engine-side helpers to the WIT surface and the glue that wires the upstream primitives into the host call boundary.
-
-The newer ComposableCoW iteration in development simplifies polling versus the watch-tower TypeScript implementation: less of the SDK's discriminated `PollResultCode` mapping may need to be replicated in `cowprotocol::composable` for `twap.poll-and-submit` to work. The rich `PollOutcome` variants described below remain the target API surface; the upstream implementation may end up simpler than the watch-tower mirror suggests.
+Embedding a concrete TWAP implementation in an SDK is an architectural smell the grant explicitly seeks to alleviate. The grant seeks to enable Shepherd as the runtime where many independent strategy implementations coexist, each compiled to its own WASM module. A specialised `twap` interface in the host would defeat that goal: every Shepherd deployment would have to use the same polling implementation, the same error-mapping, the same retry hints, with no room for different strategies to differ on those choices.
 
 ## Decision
 
-Add two new interfaces to package `shepherd:cow@0.2.0`:
+The `shepherd:cow` WIT package contains only the existing `cow-api` interface (REST passthrough + `submit-order`), which is protocol-level. No `twap` interface, no `ethflow` interface, no host-side helpers specific to either workflow.
 
-```wit
-interface twap {
-    use nexum:host/types@0.2.0.{chain-id, log, host-error};
-    use cow-api.{order-uid};
+TWAP and EthFlow modules implement their logic in Rust guest code using:
 
-    /// Discriminated outcome of a single poll attempt against
-    /// ComposableCoW. Mirrors watchtower's PollResultCode so modules
-    /// avoid spamming RPC/orderbook when an order is known-not-ready.
-    variant poll-outcome {
-        submitted(order-uid),
-        try-at-epoch(u64),      // unix seconds; module skips polls until then
-        try-on-block(u64),      // specific block number
-        try-next-block,         // default retry
-        dont-try-again,         // terminal: TWAP completed or cancelled
-    }
+- **`nexum:host/chain`** — `request` (for `eth_call`, `eth_getLogs`, etc.), `subscribe-blocks`, `subscribe-logs`.
+- **`nexum:host/local-store`** — for watch lists, cursors, and backoff state.
+- **`nexum:host/logging`** — for structured logs.
+- **`shepherd:cow/cow-api`** — `submit-order` for orderbook submission.
+- **`cowprotocol` crate** (consumed directly by the module, gated on the wasm32 feature work in ADR-0007) — for protocol types: `Order`, `OrderCreation`, `OrderUid`, signing schemes, `OrderPostError`, etc.
+- **`alloy_sol_types`** (or equivalent) — for ABI-aware decoding of `ConditionalOrderCreated`, `OrderPlacement`, `getTradeableOrderWithSignature` return values, and similar Solidity-typed payloads.
 
-    poll-and-submit: func(
-        chain-id: chain-id,
-        registration: log,
-    ) -> result<poll-outcome, host-error>;
-}
+Concretely, a TWAP module's `on_event(block)` handler iterates the local-store watch set, makes an `eth_call` to `ComposableCoW.getTradeableOrderWithSignature(owner, params, "", [])` via `chain.request`, decodes the return (or revert reason) with `alloy_sol_types`, constructs an `OrderCreation` with `cowprotocol` types, and submits via `cow-api/submit-order`. Orderbook errors are interpreted via `OrderPostError::retry_hint()` (ADR-0007). Backoff state is persisted to `local-store`. All of this lives in module Rust source, not in the engine.
 
-interface ethflow {
-    use nexum:host/types@0.2.0.{chain-id, log, host-error};
-    use cow-api.{order-uid};
-
-    submit-from-log: func(
-        chain-id: chain-id,
-        placement: log,
-    ) -> result<order-uid, host-error>;
-}
-```
-
-Both interfaces ship in the existing `shepherd` world alongside `cow-api`. `order-uid` is added to `cow-api` as `type order-uid = list<u8>` (56 bytes, validated host-side) and reused by all three interfaces; `cow-api/submit-order` keeps returning it instead of `string`. Capability names `"twap"` and `"ethflow"` are appended to `KNOWN_CAPABILITIES` so manifests can declare them under `[capabilities].required`.
-
-Host implementations are thin wrappers (~20–30 LOC each) over three upstream primitives that land in `cowprotocol` first (see ADR-0007):
-
-- `cowprotocol::composable::poll_and_build_order(provider, owner, params, proof) -> PollOutcome` — returns the same discriminated outcome (`Submitted`, `TryAtEpoch`, `TryOnBlock`, `TryNextBlock`, `DontTryAgain`). Backs `twap.poll-and-submit`.
-- `cowprotocol::eth_flow::decode_placement(log)` — decodes `OrderPlacement` into `(owner, OrderCreation, OrderUid)` with the EIP-1271 signing scheme pointing at the EthFlow contract. Backs `ethflow.submit-from-log`.
-- `cowprotocol::OrderPostError` (rich variants + `retry_hint()`) — typed orderbook submission errors with backoff/drop classification. Modules consume the hints to react to transient vs permanent failures without spamming.
-
-The engine wires these primitives into HostState and maps their errors to `host-error` kinds; no protocol logic lives in `nexum-engine`. Modules continue to declare their own log subscriptions via `[[subscription]]` in `nexum.toml`; the helpers only decode and submit, they do not auto-subscribe.
+An EthFlow module's `on_event(log)` handler decodes the `OrderPlacement` event with `alloy_sol_types`, constructs the `OrderCreation` (with the EIP-1271 signing scheme pointing at the `CoWSwapEthFlow` contract), and submits the same way. Module-side, no host helper required.
 
 ## Considered options
 
-- **Low-level primitives only** (`chain.eth-call`, `chain.keccak256`, `chain.sign-digest`, raw `cow-api/submit-order`). Maximally orthogonal, but every guest module re-derives the same EIP-712 / GPv2 / ComposableCoW / EthFlow glue. "Reuse over reimplement" applies: that derivation already lives in `cowprotocol::{Order, OrderBookApi, eth_flow, composable}` and should not be re-shipped in every WASM artifact.
-- **Implement the protocol glue inside `nexum-engine` host code, port upstream later.** Rejected per ADR-0007: every line of TWAP polling or EthFlow decoding that lives in the engine is a line that future Rust consumers cannot reuse, and a line that diverges as cow-rs evolves.
-- **EthFlow as pure passive observer (no `submit-from-log`).** Briefly considered after reading "watcher" / "monitor" in docs/00 and docs/04 as "no submission". Rejected after verifying that CoW's own autopilot DOES post equivalent (insert into `ethflow_orders` table); the Shepherd module is intended to externalize that role, not replace it with passive observation. The `pending_orders` state mentioned in docs/04 is a side-effect of the relay (local accounting of what's been observed), not the goal.
-- **Simple `option<order-uid>` return on twap instead of `poll-outcome` variant.** A 1-hour-spaced TWAP polled every block would spam ~300 RPC calls per part with `None` returns. The richer outcome (`try-at-epoch`, etc.) matches watchtower's existing `PollResult` and lets modules skip polls until the contract says it's worth retrying. Production-critical.
-- **Single combined interface** `shepherd:cow/orders` with both helpers. Cheaper world surface but harder to gate per-capability — a module that only watches EthFlow shouldn't have to import TWAP and vice versa. Splitting keeps `[capabilities].required` honest.
-- **`log-json: list<u8>` payload** instead of the typed `nexum:host/types.log` record. The record already exists and the engine's event dispatch already projects `alloy_rpc_types_eth::Log` into it, so reuse wins on both ergonomics and "no duplicate decoders".
-- **TWAP merkle-proof / `setRoot` support in v1.** Deferred. The 0.2 helper only handles `ComposableCoW.create()` (empty proof, single conditional order). `setRoot` polling requires off-chain proof derivation that itself warrants a separate helper (`twap.poll-and-submit-with-proof`) once a module actually needs it.
-- **Bumping the package to `shepherd:cow@0.3.0`.** Not needed: adding imports to an existing world is additive under WIT subsumption rules. Modules compiled against the current 0.2.0 surface continue to build.
+- **Specialised `shepherd:cow/twap` and `shepherd:cow/ethflow` interfaces** with rich `PollOutcome` variants and per-event host helpers, backed by `composable::poll_and_build_order` and `eth_flow::decode_placement` primitives in the `cowprotocol` crate. Rejected: this puts a single concrete TWAP / EthFlow implementation behind a WIT boundary, forcing every Shepherd deployment to use the same polling policy, the same error-mapping, the same retry hints. It also blurs the protocol-vs-implementation boundary the grant is meant to clarify. Multiple TWAP implementations (different polling cadences, different error tolerances, different cancel-on-loss thresholds) must be able to coexist as separate modules without changing the host or the SDK.
+- **Move TWAP / EthFlow primitives into `cowprotocol` crate but skip the WIT interfaces**, leaving modules to call `composable::poll_and_build_order` from guest code. Rejected for the same reason: `cowprotocol` is the protocol SDK, not the strategy SDK. Putting TWAP logic there embeds an implementation in the shared layer, which is the smell the grant seeks to fix.
+- **Ship a thin `shepherd-sdk` helper crate** that wraps the low-level primitive calls (eth_call, decode, submit) into a convenient `Twap::poll(...)` interface for guest modules. **Acceptable for M3** because the helper would live in guest-callable code, not behind a WIT boundary — a module that wants different polling policy just doesn't use the SDK helper. The host stays neutral.
+- **EthFlow as pure passive observer (no submission)**. Rejected on closer read of `cowprotocol/services/crates/autopilot/src/database/onchain_order_events/ethflow_events.rs`: the canonical CoW flow expects the event to be relayed into the orderbook, which is what autopilot currently does internally. Shepherd's `ethflow-watcher` externalises that role, so the module does submit; just from guest code, not via a specialised host interface.
+- **TWAP merkle-proof / `setRoot` support in v1.** Deferred. The 0.2 module only handles `ComposableCoW.create()` (empty proof, single conditional order). `setRoot` polling requires off-chain proof derivation; when a real module needs it, it will be implemented in guest code using the same low-level primitives, possibly with an SDK helper to encapsulate the proof bookkeeping.
 
 ## Consequences
 
-- `cow-api/submit-order` return type changes from `string` to `order-uid`. No external consumers today (0.2 is unreleased), so this is internal.
-- Host helpers require a chain to be configured in `[chains.<id>]` — uncovered chains return `host-error.unsupported`. Same posture as `cow-api`.
-- Orderbook idempotency (same UID on duplicate submit) is preserved but invisible to the module. Modules that need dedup must record UIDs in `local-store` themselves.
-- TWAP modules must implement the `poll-outcome` state machine: persist `next_attempt` hints (epoch or block number) in local-store, skip polls until trigger, remove watches on `dont-try-again`. Without this, the poll loop becomes O(blocks × twaps) with most calls wasted. The M3 SDK is expected to ship a helper that encapsulates the state machine.
-- Orderbook errors return as `host-error` with the original CoW error code in `code`. Modules use `OrderPostError::try_from(host_error)` plus `retry_hint()` (ADR-0007 item 3) to map to next-block / backoff / drop. Without this layered approach, modules spam the orderbook with permanently-broken orders.
-- Implementation order: the three `cowprotocol` primitives (`composable::poll_and_build_order` with rich `PollOutcome`, `eth_flow::decode_placement`, `OrderPostError` rich + `retry_hint`) land in `bleu/cow-rs` first; `nullis-shepherd` adopts via the existing `[patch.crates-io]` rev bump (ADR-0004). Host-side issues stay blocked on upstream merges.
-- Failure modes map onto existing `host-error-kind` variants (`invalid-input`, `denied`, `rate-limited`, `timeout`, `unavailable`, `unsupported`, `internal`). No new error taxonomy.
+- `shepherd:cow@0.2.0` keeps `cow-api` as its only interface. No new WIT files in this ADR.
+- `KNOWN_CAPABILITIES` in `crates/nexum-engine/src/manifest.rs` does **not** gain `"twap"` or `"ethflow"` entries. Modules declare the universal capabilities they actually use: `chain`, `local-store`, `logging`, `cow-api`.
+- Modules ship larger (~150 LOC each estimated, up from the ~30 LOC the host-helper design implied), because event decoding, eth_call orchestration, OrderCreation construction, and error-hint interpretation now live in guest code. This is the explicit trade-off: more code per module, less coupling, more freedom for different strategies to coexist.
+- Different TWAP polling strategies can coexist as different modules. Operators choose which to load via `engine.toml`'s `[[modules]]` array.
+- The watch-tower TypeScript implementation remains the closest reference for what a TWAP module's logic looks like, but it is reference material, not a template the Rust module mirrors verbatim. A newer ComposableCoW iteration in development may simplify the polling surface significantly; the relevant decisions live in the module, not the host.
+- `OrderPostError` rich variants + `retry_hint()` (ADR-0007 item 1, formerly item 3) become the primary protocol-level contract between the orderbook and any module submitting orders. Modules `match` on the typed error and apply the `RetryHint` (try-next-block / backoff-seconds / drop). This logic is generic across TWAP, EthFlow, stop-loss, and any future strategy.
+- The M3 SDK (`shepherd-sdk` crate) is the natural home for ergonomic guest-side helpers: `WatchSet`, `PollLoop`, `BackoffLedger`, decode-and-submit utilities. The SDK is opt-in for module authors and lives entirely on the guest side; the host remains protocol-neutral.
+- The architecture and sequence diagrams in `docs/diagrams/` that depict `twap.poll-and-submit` and `ethflow.submit-from-log` host calls reflect the rejected design and must be updated to show modules calling low-level primitives directly.
