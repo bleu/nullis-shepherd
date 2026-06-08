@@ -1,0 +1,56 @@
+sequenceDiagram
+    autonumber
+    actor User as User<br/>(wallet)
+    participant Contract as ComposableCoW<br/>(on-chain)
+    participant RPC as Chain RPC<br/>(WSS)
+    participant EL as nexum-engine<br/>Event Loop
+    participant Mod as twap-monitor<br/>(WASM module)
+    participant SolDec as alloy_sol_types<br/>(in module)
+    participant Cow as cowprotocol crate<br/>(in module, wasm32)
+    participant Host as HostState<br/>(host backends)
+    participant OB as CoW Orderbook
+
+    Note over User,Contract: Registration (one-time per TWAP)
+    User->>Contract: create(twapParams)
+    Contract-->>RPC: emit ConditionalOrderCreated(owner, params)
+    RPC-->>EL: log delivered
+    EL->>Mod: on_event(LogEvent)
+    Mod->>SolDec: decode ConditionalOrderCreated
+    SolDec-->>Mod: (owner, params, salt)
+    Mod->>Host: local-store.set("watch:{owner}:{hash}", params)
+
+    Note over EL,OB: Per-block polling loop
+    loop For each block N
+        RPC-->>EL: eth_subscribe newHeads
+        EL->>Mod: on_event(BlockEvent { N })
+        Mod->>Host: local-store.list_keys("watch:")
+
+        loop For each watch where next_attempt <= N
+            Mod->>Host: chain.request(chain_id, "eth_call", [...])
+            Host->>RPC: eth_call ComposableCoW.<br/>getTradeableOrderWithSignature(owner, params)
+            RPC-->>Host: return value or revert
+            Host-->>Mod: result (JSON encoded)
+            Mod->>SolDec: decode return or interpret revert reason
+            SolDec-->>Mod: PollOutcome (module-defined enum)
+
+            alt Ready (order, signature)
+                Mod->>Cow: build OrderCreation
+                Cow-->>Mod: OrderCreation
+                Mod->>Host: cow-api.submit-order(chain_id, order_json)
+                Host->>OB: POST /api/v1/orders
+                OB-->>Host: Ok(OrderUid) or Err(error_code)
+                Host-->>Mod: Result<OrderUid, host-error>
+                alt Ok(uid)
+                    Mod->>Host: local-store.set("submitted:{uid}", ...)
+                else Err
+                    Mod->>Cow: OrderPostError::try_from(host-error)<br/>.retry_hint()
+                    Cow-->>Mod: TryNextBlock / BackoffSeconds(s) / Drop
+                    Mod->>Host: local-store update<br/>(next_attempt or remove watch)
+                end
+            else NotReady (try at epoch t)
+                Mod->>Host: local-store.set("watch:...next_attempt", t)
+            else Terminal (TWAP completed or cancelled)
+                Mod->>Host: local-store.delete("watch:...")
+            end
+        end
+    end
