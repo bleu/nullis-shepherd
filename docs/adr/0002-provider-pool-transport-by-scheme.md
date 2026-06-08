@@ -13,10 +13,17 @@ implemented-in: nullislabs/shepherd#8, nullislabs/shepherd#9
 
 The `ProviderPool::from_config` constructor reads each chain's `rpc_url` and switches by URL scheme prefix:
 
-- `ws://` or `wss://` → `ProviderBuilder::new().connect_ws(WsConnect::new(url))`. Pubsub transport. Subscriptions and request/response both work.
-- `http://` or `https://` → `ProviderBuilder::new().connect_http(parsed)`. HTTP transport. Request/response only; `subscribe-blocks` and `subscribe-logs` surface as a host error to the guest.
+- `ws://` or `wss://` → `ProviderBuilder::new().connect_ws(WsConnect::new(url))`. Pubsub transport. Subscriptions and request/response both work. **This is the recommended configuration for any chain a module subscribes to.**
+- `http://` or `https://` → `ProviderBuilder::new().connect_http(parsed)`. HTTP transport. Request/response only; `subscribe-blocks` and `subscribe-logs` surface as `host-error.unsupported` to the guest.
 
 Both transports erase to `DynProvider` so the rest of the engine is transport-agnostic.
+
+Alloy is capable of emulating `eth_subscribe` on HTTP via polling, but this is intentionally **not** enabled. The engine takes an opinionated stance favouring WebSockets for subscriptions; operators who want push-based events configure WSS endpoints. HTTP-only chains are supported for `request` traffic but not for subscriptions.
+
+## Non-goals
+
+- **RPC failover, load balancing, and retry policies are explicitly out of scope for the engine.** This logic lives in upstream crates (alloy ships tower-style middleware for timeout / retry / rate-limit / fallback endpoint). The engine does not roll its own. Operators wanting failover configure it via alloy provider builders before passing them through, or rely on the provider's own fallback (Alchemy, Infura, etc. handle it server-side).
+- Re-routing requests across chains, rebalancing across pools within a chain, and similar provider-management concerns are likewise alloy's responsibility.
 
 ## Considered options
 

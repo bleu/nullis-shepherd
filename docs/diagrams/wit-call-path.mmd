@@ -1,0 +1,34 @@
+sequenceDiagram
+    autonumber
+    participant Src as Module Rust source<br/>(twap-monitor/src/lib.rs)
+    participant Bindgen as wit-bindgen<br/>(generated stubs)
+    participant Wasm as WASM Component<br/>(twap.wasm)
+    participant Wt as wasmtime instance
+    participant Lk as wasmtime Linker
+    participant HS as HostState (Rust)
+    participant PP as ProviderPool
+    participant Alloy as alloy provider
+    participant RPC as Chain RPC
+
+    Note over Src,Wasm: Build phase (cargo build)
+    Src->>Bindgen: chain::request(chain_id, method, params)<br/>(plain Rust call)
+    Bindgen->>Wasm: compile into WASM Component<br/>with "nexum:host/chain" import
+
+    Note over Wasm,RPC: Runtime: module calls chain::request
+    Wasm->>Wt: WASM import call:<br/>"nexum:host/chain"."request"
+    Wt->>Lk: lookup binding for import
+    Lk->>HS: invoke trait impl:<br/>HostState::Chain::request(...)
+    Note over HS: tracing::info!("[chain] request<br/>chain=... method=...")
+    HS->>PP: pool.get(chain_id)
+    PP-->>HS: &DynProvider
+    HS->>Alloy: provider.raw_request(method, params)
+    Alloy->>RPC: JSON-RPC over WSS/HTTP
+    RPC-->>Alloy: response bytes
+    Alloy-->>HS: serde_json::Value
+    HS-->>Lk: Ok(stringified JSON)
+    Lk-->>Wt: return value (marshaled)
+    Wt-->>Wasm: import call returns
+    Wasm-->>Bindgen: unmarshal canonical ABI<br/>back to Rust types
+    Bindgen-->>Src: returns Result<String, HostError>
+
+    Note over Src,RPC: All host calls follow this path.<br/>Only the trait impl on the right side<br/>(HS → PP/OBP/LS/...) changes per capability.

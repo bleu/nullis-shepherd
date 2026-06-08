@@ -1,127 +1,56 @@
 ---
-status: proposed
+status: deferred
+deferred-to: 0.3
 ---
 
-# Dynamic address registration for log subscriptions
+# Dynamic address registration for log subscriptions (deferred to 0.3)
+
+## Status
+
+**Deferred to 0.3.** Neither TWAP nor EthFlow (the M2 grant deliverables) needs this capability, and the design's complexity is not justified by current need.
+
+This ADR is preserved as a reference for the design space; the final shape will be revisited when the first module actually requiring dynamic address registration emerges.
 
 ## Context
 
-Some module archetypes need to track contracts deployed dynamically by a factory, for example Uniswap V3 pools (deployed by `UniswapV3Factory`). Static `[[subscription]]` declarations in `nexum.toml` cannot express this: the child addresses are not known when the module's manifest is authored.
+Some module archetypes need to track contracts deployed dynamically by a factory, for example Uniswap V3 pools (deployed by `UniswapV3Factory`). Static `[[subscription]]` declarations in `module.toml` cannot express this: the child addresses are not known when the module's manifest is authored.
 
-Neither TWAP nor EthFlow (the M2 grant deliverables) needs this. Both subscribe to a single well-known contract per chain. This ADR is forward-looking, motivated by `docs/migration/0.1-to-0.2.md` §522 declaring 0.2 the breaking-change window; adding factory support after 0.2 would require another major version bump.
+Neither TWAP nor EthFlow needs this; both subscribe to a single well-known contract per chain. This ADR was originally framed as forward-looking work to land in 0.2's breaking-change window.
 
-Envio HyperIndex uses a hybrid pattern that fits Shepherd's design: topics are declared statically in the manifest, and the watched address set is mutated at runtime via a `register()` host call. The engine maintains a single aggregated log subscription per template; the address set grows as the module learns of new contracts.
+## Why deferred
 
-Whether the engine should also handle historical backfill on register (the module passes `from-block`, engine paginates `eth_getLogs` from there to head before going live) is a separate decision flagged for upstream review. This ADR keeps the engine surface minimal and defers historical replay to the existing module-driven catch-up pattern documented in `docs/02:260`.
+Two considerations motivate the deferral:
 
-## Decision
+1. **`eth_getLogs` already supports topic-only filtering.** The JSON-RPC method accepts a filter without an `address` field, so a module subscribing to a topic across all addresses can be served by the existing primitives if the operator's RPC endpoint cooperates. If topic-only filters at the JSON-RPC layer are good enough for the common case, the engine does not need a manifest-and-host-function mechanism on top.
+2. **The schema and host-function surface add engine complexity that no M2 deliverable consumes.** The historical-backfill story is the largest contributor to that complexity and was already trimmed once; deferring the rest in the same spirit avoids paying for a mechanism nothing exercises yet.
 
-Two pieces:
+Combined: the dynamic-subscription design is not load-bearing for M2 deliverables, and the simplest path (topic-only `eth_subscribe` filters with module-side address filtering) may suffice for a wide range of indexer use cases. The dynamic-registration mechanism originally proposed (Envio-style `register-address`) addresses scaling concerns at high address counts but should land when a real consumer is on the table to validate the trade-off.
 
-**1. Manifest schema gains `[[subscription.template]]`**, a topic-only log subscription whose address set is populated at runtime:
+## Reference design (not adopted in 0.2)
 
-```toml
-[[subscription.template]]
-chain_id = 1
-name = "uniswap_v3_pool"
-event_topics = [
-    "0xc42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67",   # Swap
-    "0x7a53080ba414158be7ec69b987b5fb7d07dee101fe85488f0853ae16239d0bde",   # Mint
-]
-```
+The original proposal — kept here so future discussions have a starting point — was a hybrid of static topics and dynamic addresses:
 
-Existing `[[subscription]]` blocks with concrete `address` are unchanged. A module typically declares one static `[[subscription]]` for the factory event itself, plus one `[[subscription.template]]` per child contract type.
+- `[[subscription.template]]` block in `module.toml` declaring `chain_id`, `name`, `event_topics` (no address).
+- `chain.register-address(chain_id, template_name, address)` host function for the module to add addresses at runtime.
+- `chain.unregister-address(chain_id, template_name, address)` mirror function.
+- `log-source.template(string)` variant on the event dispatch so modules route by template name.
+- Engine maintains a single aggregated `eth_subscribe logs` per chain per template, with filter `(topic ∈ event_topics) ∧ (address ∈ current_set)`. The address set is mutated as the module discovers new contracts.
+- Historical backfill (`from-block` argument on register, paginated `eth_getLogs` orchestration) was contentious and was already trimmed before deferral.
 
-**2. `nexum:host/chain` gains two host functions** for the module to manage the address set:
+Envio HyperIndex's `context.<Contract>.register()` API is the closest existing pattern, validated in production for indexers tracking thousands of dynamically-discovered contracts.
 
-```wit
-interface chain {
-    // existing request, request-batch, subscribe-blocks, subscribe-logs ...
+## Alternatives left open for 0.3
 
-    /// Add an address to the watch set for `template-name` on `chain-id`.
-    /// Idempotent: calling twice with the same arguments is a no-op.
-    register-address: func(
-        chain-id: chain-id,
-        template-name: string,
-        address: list<u8>,            // 20 bytes
-    ) -> result<_, host-error>;
+- **Topic-only `[[subscription]]`** (no address field; engine forwards `eth_subscribe logs` with topic-only filter; module client-side filters logs by address it cares about). Simplest, no new host functions. Trade-off: firehose volume for common topics like `Transfer`.
+- **Dynamic register-address** (the original reference design above).
+- **Engine-extracted factory child addresses** (Ponder-style declarative schema with ABI-aware extraction rules). Schema complexity grows with exotic factory shapes.
+- **No factory pattern; modules wanting dynamic discovery use raw `chain.subscribe-logs` with topic-only filter and persist the discovered address set themselves**.
 
-    /// Remove an address from the watch set. Subsequent events on that
-    /// address are dropped. Idempotent.
-    unregister-address: func(
-        chain-id: chain-id,
-        template-name: string,
-        address: list<u8>,
-    ) -> result<_, host-error>;
-}
-```
+The choice depends on what the first consumer actually needs.
 
-**3. `log-source` variant in `nexum:host/event-module`** gains a `template` case so modules can route events:
+## Consequences of deferring
 
-```wit
-variant log-source {
-    static(u32),               // existing: index into [[subscription]]
-    template(string),          // new: name of the [[subscription.template]]
-}
-```
-
-Module code (Rust, Uniswap V3 indexer):
-
-```rust
-fn init(config: Vec<(String, String)>) -> Result<(), HostError> {
-    // Resume: re-register every pool we already discovered.
-    for key in local_store::list_keys("pool:")? {
-        let pool = parse_addr(&key);
-        chain::register_address(1, "uniswap_v3_pool", &pool)?;
-    }
-    Ok(())
-}
-
-fn on_event(event: Event) -> Result<(), HostError> {
-    match event {
-        // Factory event, declared as a static [[subscription]] for the factory.
-        Event::Log(LogEvent { log, source: LogSource::Static(0) }) => {
-            let pool = decode_pool_created(&log)?;
-            chain::register_address(1, "uniswap_v3_pool", &pool)?;
-            local_store::set(&format!("pool:{}", hex(&pool)), b"")?;
-        }
-        // Pool event, dispatched through the template.
-        Event::Log(LogEvent { log, source: LogSource::Template(name) })
-            if name == "uniswap_v3_pool" =>
-        {
-            process_pool_event(log)?;
-        }
-        _ => {}
-    }
-    Ok(())
-}
-```
-
-Engine internals:
-
-- **Boot**: read all `[[subscription.template]]` blocks. Initialise per-template address sets from the reserved key `__nexum:template:{name}:addresses` in the module's `local-store` namespace if present from a prior run.
-- **Live**: one `eth_subscribe logs` per chain per template with filter `(topic in event_topics) AND (address in current_set)`. When `register-address` mutates the set, the engine re-subscribes.
-- **Persistence**: engine writes `__nexum:template:{name}:addresses` whenever the set changes. Resume after restart is automatic if the module re-calls `register-address` in `init`.
-
-Historical backfill is the module's responsibility, consistent with the catch-up pattern documented in `docs/02:260`. The module calls `chain.request("eth_getLogs", ...)` during `init` to replay history before going live. The engine does not backfill on `register-address`.
-
-## Considered options
-
-- **Ponder full-declarative** (factory address, event, parameter declared in manifest; engine extracts child). Rejected: schema must express ABI-aware extraction (`child = { source = "topic", index = 1 }` or similar), and grows with every exotic factory shape (nested factories, multi-child events, address computed from multiple fields). The Envio model pushes that complexity into module Rust code, where it belongs given the module already decodes events with `alloy_sol_types`.
-- **Pure imperative `chain.open-log-stream(filter) -> stream-handle`.** Rejected: each call opens a new subscription, so N pools means N WSS connections. Doesn't scale to indexers with 10k+ tracked addresses. The Envio model keeps one subscription per template and mutates its address set; engine batches naturally.
-- **Engine-driven historical backfill on register** (with `from-block` parameter). Rejected after PR review flagged the added complexity. Module-driven catch-up via `init` + `eth_getLogs` already exists in mfw's design (`docs/02:260`) and covers the same use case without adding engine state (per-address cursor, paginated `eth_getLogs` orchestration). M3 SDK can ship a helper that wraps the pattern.
-- **Wildcard manifest** (`address = "*"` with topic-only filter, module client-side filters). Rejected: mainnet has ~10k contracts emitting `Transfer` or `Swap` per day. The engine would deliver every matching event to every wildcard subscriber; modules pay fuel and bandwidth to discard 99% of them.
-- **Defer factory pattern entirely to 0.3.** Rejected: 0.2 is the breaking-change window per migration:522. Adding either `[[subscription.template]]` or `register-address` after 0.2 requires another major bump.
-- **Templates declared inside `[[subscription]]` with optional `address` (one block, two modes).** Rejected: conflates two semantically distinct cases. Modules looking at `[[subscription]]` would have to inspect for the presence of `address` to know whether they need to call `register-address`. Separate block name is clearer.
-
-## Consequences
-
-- `nexum.toml` schema gains `[[subscription.template]]` with `chain_id`, `name`, `event_topics`. Schema extension needs upstream approval.
-- `nexum:host/chain` gains `register-address` and `unregister-address`; `nexum:host/event-module`'s `log-source` variant gains `template(string)`. WIT change needs upstream approval.
-- Reserved key namespace `__nexum:template:*` in each module's `local-store` namespace. Modules MUST NOT write to keys with this prefix.
-- Module boilerplate per factory is roughly 5 lines (decode the factory event, call `register-address`, persist for resume). The M3 SDK can ship a helper that wraps it.
-- Register sources are not limited to factory events. A module can register addresses from any signal: HTTP API responses, governance votes, operator-supplied lists. Composability is a deliberate feature.
-- Nested factories (a child contract that is itself a factory) work without schema changes. The child's event handler calls `register-address` on the grandchild template.
-- Conditional registration ("only register pools with fee = 3000") works without schema changes. The module's factory-event handler decides.
-- The address set per template is bounded only by `local-store` quota. The engine enforces a soft cap (default 50k addresses per template) configurable in `engine.toml`; exceeding the cap returns `host-error.denied` from `register-address`.
-- Open follow-up: whether to support `from-block` historical backfill on register is left for upstream discussion. The minimal surface here can be extended additively if needed.
+- The `shepherd:cow` and `nexum:host` WIT surfaces remain unchanged in 0.2.
+- `module.toml` schema does not gain `[[subscription.template]]` in 0.2.
+- 0.2 is the breaking-change window; adding any of the above options in 0.3 may require a major version bump if the chosen shape extends `module.toml` or `nexum:host/chain` non-additively. This risk is accepted on the basis that the M2 grant deliverables do not require this surface.
+- TWAP and EthFlow modules ship in 0.2 against the existing static `[[subscription]]` declarations (one address per subscription, known at manifest authorship time). This is consistent with how the autopilot ethflow indexer and watch-tower configure their subscriptions today.
