@@ -1,0 +1,61 @@
+graph TB
+    subgraph manifests["Module Manifests (module.toml per module)"]
+        M1S["module twap-monitor:<br/>[[subscription]] kind=log<br/>chain=1, address=ComposableCoW,<br/>topics=[ConditionalOrderCreated]<br/>[[subscription]] kind=block, chain=1"]
+        M2S["module ethflow-watcher:<br/>[[subscription]] kind=log<br/>chain=1, address=CowEthFlow,<br/>topics=[OrderPlacement]"]
+        M3S["module other-module:<br/>[[subscription]] kind=block, chain=1"]
+    end
+
+    subgraph supervisor["Supervisor: aggregate at boot"]
+        BlockAgg["Block subscriptions<br/>grouped by chain_id"]
+        LogAgg["Log subscriptions<br/>grouped by (chain_id, filter_key)<br/>where filter_key = address+topics hash"]
+    end
+
+    subgraph subs["Aggregated WSS subscriptions"]
+        BSub["eth_subscribe newHeads<br/>chain=1 (shared by all subscribers)"]
+        LSub1["eth_subscribe logs<br/>chain=1, filter=ComposableCoW+ConditionalOrderCreated<br/>(owner: twap-monitor)"]
+        LSub2["eth_subscribe logs<br/>chain=1, filter=CowEthFlow+OrderPlacement<br/>(owner: ethflow-watcher)"]
+    end
+
+    subgraph dispatch["Event Loop dispatch"]
+        Decide{Event kind?}
+        Broadcast["Fan-out: dispatch to ALL<br/>subscribers of that chain"]
+        Route["Route: dispatch to OWNER<br/>of matching filter_key only"]
+    end
+
+    subgraph delivery["Module on_event invocations"]
+        D1["twap-monitor.on_event(BlockEvent)"]
+        D2["ethflow-watcher.on_event(LogEvent)<br/>or twap-monitor (LogEvent)"]
+        D3["other-module.on_event(BlockEvent)"]
+    end
+
+    M1S --> BlockAgg
+    M1S --> LogAgg
+    M2S --> LogAgg
+    M3S --> BlockAgg
+
+    BlockAgg --> BSub
+    LogAgg --> LSub1
+    LogAgg --> LSub2
+
+    BSub --> Decide
+    LSub1 --> Decide
+    LSub2 --> Decide
+
+    Decide -- "block" --> Broadcast
+    Decide -- "log" --> Route
+
+    Broadcast --> D1
+    Broadcast --> D3
+    Route --> D2
+
+    classDef manifest fill:#fff4e6,stroke:#ff9800,color:#000
+    classDef agg fill:#e6f3ff,stroke:#1e88e5,color:#000
+    classDef wss fill:#f0e6ff,stroke:#7e3ff2,color:#000
+    classDef decide fill:#fffde7,stroke:#fbc02d,color:#000
+    classDef dispatch fill:#e6ffe6,stroke:#2e7d32,color:#000
+
+    class M1S,M2S,M3S manifest
+    class BlockAgg,LogAgg agg
+    class BSub,LSub1,LSub2 wss
+    class Decide,Broadcast,Route decide
+    class D1,D2,D3 dispatch
