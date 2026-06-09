@@ -477,7 +477,7 @@ async fn main() -> anyhow::Result<()> {
     let store_path = engine_cfg.engine.state_dir.join("local-store.redb");
     let local_store = host::local_store_redb::LocalStore::open(&store_path)
         .with_context(|| format!("open local-store at {}", store_path.display()))?;
-    let cow_pool = host::cow_orderbook::OrderBookPool::with_default_chains();
+    let cow_pool = host::cow_orderbook::OrderBookPool::default();
     let provider_pool = host::provider_pool::ProviderPool::from_config(&engine_cfg)
         .await
         .context("open chain providers")?;
