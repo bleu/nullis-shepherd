@@ -1,6 +1,6 @@
 //! Engine-side runtime configuration.
 //!
-//! Distinct from `nexum.toml` (module manifest): this file describes
+//! Distinct from `module.toml` (module manifest): this file describes
 //! the *engine*'s I/O wiring — chain RPC endpoints and the on-disk
 //! location of the `local-store` database. Both are required for the
 //! 0.2 reference engine to do anything other than print stubs.

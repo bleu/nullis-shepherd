@@ -1,7 +1,6 @@
-//! Minimal `nexum.toml` parser and capability-enforcement helpers (0.2 scope).
+//! `module.toml` parser and capability-enforcement helpers (0.2 scope).
 //!
-//! 0.2 intentionally ships a slim subset of the manifest spec described in
-//! the migration guide §3:
+//! 0.2 intentionally ships a slim subset of the manifest spec:
 //!
 //! - `[capabilities].required` is parsed and validated (names must be in
 //!   the known capability set; the 0.2 reference engine always provides
@@ -14,9 +13,9 @@
 //!   module's `init`. Typed `config-value` variant is deferred to 0.3.
 //!
 //! When the manifest file is missing or has no `[capabilities]` section,
-//! a deprecation warning is emitted on stderr and the engine falls back
-//! to 0.1 behaviour (treat every linked capability as required). This
-//! fallback will be removed in 0.3.
+//! a deprecation warning is emitted and the engine falls back to 0.1
+//! behaviour (treat every linked capability as required). This fallback
+//! will be removed in 0.3.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -114,7 +113,7 @@ pub struct LoadedManifest {
     pub config: Vec<(String, String)>,
 }
 
-/// Read `nexum.toml` from `path`, parse, validate, and emit a deprecation
+/// Read `module.toml` from `path`, parse, validate, and emit a deprecation
 /// warning if `[capabilities]` is absent (0.1-compat fallback).
 pub fn load(path: &Path) -> Result<LoadedManifest, ParseError> {
     let raw = std::fs::read_to_string(path).map_err(ParseError::Io)?;
@@ -123,10 +122,9 @@ pub fn load(path: &Path) -> Result<LoadedManifest, ParseError> {
     let caps = manifest.capabilities.as_ref();
     if caps.is_none() {
         eprintln!(
-            "[deprecation] no [capabilities] section in nexum.toml — \
+            "[deprecation] no [capabilities] section in module.toml — \
              defaulting to all-required (0.1 behaviour). This default \
-             will be removed in 0.3; add an explicit [capabilities] block \
-             now."
+             will be removed in 0.3; add an explicit [capabilities] block."
         );
     }
 
@@ -173,13 +171,13 @@ pub fn load(path: &Path) -> Result<LoadedManifest, ParseError> {
     })
 }
 
-/// Synthesise a "0.1 fallback" manifest for when no `nexum.toml` is found.
+/// Synthesise a "0.1 fallback" manifest for when no `module.toml` is found.
 /// Emits the same deprecation warning as a missing-section manifest.
 pub fn fallback_manifest() -> LoadedManifest {
     eprintln!(
-        "[deprecation] no nexum.toml found — defaulting to all-required \
+        "[deprecation] no module.toml found — defaulting to all-required \
          (0.1 behaviour). This default will be removed in 0.3; ship a \
-         nexum.toml alongside your component."
+         module.toml alongside your component."
     );
     LoadedManifest {
         manifest: Manifest::default(),

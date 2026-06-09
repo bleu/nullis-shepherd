@@ -30,7 +30,7 @@ struct HostState {
     /// Origin for `clock::monotonic-ns`. Differences between successive
     /// readings are the only meaningful values.
     monotonic_baseline: Instant,
-    /// Per-module `[capabilities.http].allow` allowlist (from nexum.toml).
+    /// Per-module `[capabilities.http].allow` allowlist (from module.toml).
     /// Consulted by `http::fetch` before any outbound call.
     http_allowlist: Vec<String>,
     /// Namespace for the running module's `local-store` rows. Set from
@@ -390,7 +390,7 @@ impl nexum::host::http::Host for HostState {
                 code: 0,
                 message: format!(
                     "host {host} not in [capabilities.http].allow; \
-                     add it to nexum.toml to permit"
+                     add it to module.toml to permit"
                 ),
                 data: None,
             });
@@ -419,7 +419,7 @@ async fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);
     let wasm_path = args.next().ok_or_else(|| {
         anyhow::anyhow!(
-            "usage: nexum-engine <path-to-component.wasm> [<nexum.toml>] [<engine.toml>]"
+            "usage: nexum-engine <path-to-component.wasm> [<module.toml>] [<engine.toml>]"
         )
     })?;
     let explicit_manifest = args.next().map(PathBuf::from);
@@ -441,17 +441,30 @@ async fn main() -> anyhow::Result<()> {
     info!(wasm = %wasm_path, "loading component");
 
     // -- 3. Load the module manifest. --
+    // Canonical name is module.toml (ADR-0001). nexum.toml is accepted with a
+    // deprecation warning during the 0.1→0.2 transition; removed in 0.3.
     let manifest_path = explicit_manifest.or_else(|| {
-        PathBuf::from(&wasm_path)
-            .parent()
-            .map(|p| p.join("nexum.toml"))
+        let dir = PathBuf::from(&wasm_path).parent()?.to_owned();
+        let canonical = dir.join("module.toml");
+        if canonical.exists() {
+            return Some(canonical);
+        }
+        let legacy = dir.join("nexum.toml");
+        if legacy.exists() {
+            eprintln!(
+                "[deprecation] nexum.toml is deprecated; rename to module.toml (ADR-0001). \
+                 Support will be removed in 0.3."
+            );
+            return Some(legacy);
+        }
+        None
     });
     let loaded = match manifest_path.as_deref() {
-        Some(p) if p.exists() => {
-            info!(manifest = %p.display(), "loading nexum.toml");
+        Some(p) => {
+            info!(manifest = %p.display(), "loading module manifest");
             manifest::load(p)?
         }
-        _ => manifest::fallback_manifest(),
+        None => manifest::fallback_manifest(),
     };
 
     // -- 4. Bring up the host backends. --
