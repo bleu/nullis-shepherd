@@ -24,6 +24,7 @@ use redb::{Database, ReadableTable, TableDefinition};
 use thiserror::Error;
 
 const TABLE: TableDefinition<'static, &[u8], &[u8]> = TableDefinition::new("nexum:local-store");
+#[cfg(test)]
 const PREFIX_LEN: usize = 32;
 
 /// Process-wide handle to the local-store redb database. Cheap to

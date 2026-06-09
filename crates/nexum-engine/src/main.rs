@@ -496,6 +496,16 @@ async fn main() -> anyhow::Result<()> {
         Component::from_file(&engine, &wasm_path).context("failed to load component")?;
     tracing::debug!(elapsed_ms = ?load_start.elapsed(), "component load");
 
+    // Enforce capability declarations before spending time on instantiation.
+    manifest::enforce_capabilities(
+        &loaded,
+        component
+            .component_type()
+            .imports(&engine)
+            .map(|(name, _)| name),
+    )
+    .map_err(|e| anyhow::anyhow!("{e}"))?;
+
     let mut linker = Linker::<HostState>::new(&engine);
     Shepherd::add_to_linker::<HostState, wasmtime::component::HasSelf<HostState>>(
         &mut linker,
