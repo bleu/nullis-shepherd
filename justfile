@@ -10,10 +10,14 @@ build-module:
 build: build-engine build-module
 
 # Build the module then run the engine with it. The second argument is the
-# module's nexum.toml — without it the engine prints the 0.1-compat
+# module's module.toml — without it the engine prints the 0.1-compat
 # deprecation warning and proceeds with empty capabilities/config.
 run: build-module build-engine
-    cargo run -p nexum-engine -- target/wasm32-wasip2/release/example.wasm modules/example/nexum.toml
+    cargo run -p nexum-engine -- target/wasm32-wasip2/release/example.wasm modules/example/module.toml
+
+# Run host engine unit tests
+test:
+    cargo test -p nexum-engine
 
 # Check the entire workspace
 check:
