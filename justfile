@@ -19,6 +19,10 @@ run: build-module build-engine
 test:
     cargo test -p nexum-engine
 
+# Build module + engine, then run E2E integration tests
+test-e2e: build-module build-engine
+    cargo test -p nexum-engine supervisor::tests::e2e
+
 # Check the entire workspace
 check:
     cargo check --target wasm32-wasip2 -p example
