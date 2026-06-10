@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), warn(unused_crate_dependencies))]
+
 mod engine_config;
 mod host;
 mod manifest;
@@ -13,7 +15,7 @@ use wasmtime::{Engine, Store};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 // Both packages are listed explicitly so wit-parser can resolve the
-// cross-package reference natively — no vendored deps/ tree needed.
+// cross-package reference natively - no vendored deps/ tree needed.
 // World name is fully qualified.
 wasmtime::component::bindgen!({
     path: ["../../wit/nexum-host", "../../wit/shepherd-cow"],
@@ -36,11 +38,11 @@ struct HostState {
     /// Namespace for the running module's `local-store` rows. Set from
     /// `manifest.module.name` at instantiation.
     module_namespace: String,
-    /// `cow-api` backend — per-chain `OrderBookApi` clients + reqwest.
+    /// `cow-api` backend - per-chain `OrderBookApi` clients + reqwest.
     cow: host::cow_orderbook::OrderBookPool,
-    /// `chain` backend — per-chain alloy `DynProvider` pool.
+    /// `chain` backend - per-chain alloy `DynProvider` pool.
     chain: host::provider_pool::ProviderPool,
-    /// `local-store` backend — redb file with host-side namespacing.
+    /// `local-store` backend - redb file with host-side namespacing.
     store: host::local_store_redb::LocalStore,
 }
 
@@ -139,11 +141,11 @@ impl shepherd::cow::cow_api::Host for HostState {
                 message: format!("invalid OrderCreation JSON: {err}"),
                 data: None,
             }),
-            Err(host::cow_orderbook::CowApiError::Orderbook(msg)) => Err(HostError {
+            Err(host::cow_orderbook::CowApiError::Orderbook(err)) => Err(HostError {
                 domain: "cow-api".into(),
                 kind: HostErrorKind::Denied,
                 code: 0,
-                message: msg,
+                message: err.to_string(),
                 data: None,
             }),
             Err(err) => Err(internal_error("cow-api", err.to_string())),
@@ -218,7 +220,7 @@ impl nexum::host::chain::Host for HostState {
 
 impl nexum::host::identity::Host for HostState {
     async fn accounts(&mut self) -> Result<Vec<Vec<u8>>, HostError> {
-        // No keystore wired yet — return an empty roster so guests can
+        // No keystore wired yet - return an empty roster so guests can
         // probe-then-skip without erroring. Real keystore lands in 0.3.
         Ok(vec![])
     }
@@ -317,7 +319,7 @@ impl nexum::host::messaging::Host for HostState {
         _end_time: Option<u64>,
         _limit: Option<u32>,
     ) -> Result<Vec<nexum::host::types::Message>, HostError> {
-        // Empty result — same posture as `identity::accounts`.
+        // Empty result - same posture as `identity::accounts`.
         Ok(vec![])
     }
 }
@@ -355,7 +357,7 @@ impl nexum::host::random::Host for HostState {
         let mut buf = vec![0u8; len as usize];
         // getrandom 0.4: fill() returns Result<(), Error>. CSPRNG failures
         // are exceptionally rare on supported platforms; on failure we
-        // return zero-filled bytes — guests that need a strong-failure
+        // return zero-filled bytes - guests that need a strong-failure
         // signal should use identity or chain primitives instead.
         let _ = getrandom::fill(&mut buf);
         buf
@@ -369,7 +371,7 @@ impl nexum::host::http::Host for HostState {
     ) -> Result<nexum::host::http::Response, HostError> {
         // Manifest allowlist enforcement runs before any I/O. Hosts that
         // never link a manifest leave `http_allowlist` empty, which denies
-        // every request — matching the "no implicit network" stance.
+        // every request - matching the "no implicit network" stance.
         let host = match manifest::extract_host(&req.url) {
             Some(h) => h,
             None => {
@@ -485,7 +487,7 @@ async fn main() -> anyhow::Result<()> {
     // -- 5. Build the wasmtime engine + component. --
     let mut config = wasmtime::Config::new();
     config.wasm_component_model(true);
-    // `async_support` was deprecated in wasmtime 45 — the engine
+    // `async_support` was deprecated in wasmtime 45 - the engine
     // resolves async on its own. Keeping the call out of the Config
     // chain silences the `deprecated` warning under
     // `RUSTFLAGS=-D warnings`.

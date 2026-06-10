@@ -145,7 +145,7 @@ impl std::error::Error for CapabilityViolation {}
 /// a deprecation warning.
 ///
 /// `component_imports` should be the iterator returned by
-/// `component.component_type().imports(&engine)` — pass the **name** part
+/// `component.component_type().imports(&engine)` - pass the **name** part
 /// (`&str`) of each `(&str, ComponentItem)` tuple.
 pub fn enforce_capabilities<'a>(
     loaded: &LoadedManifest,
@@ -204,7 +204,7 @@ pub fn load(path: &Path) -> Result<LoadedManifest, ParseError> {
     let caps = manifest.capabilities.as_ref();
     if caps.is_none() {
         eprintln!(
-            "[deprecation] no [capabilities] section in module.toml — \
+            "[deprecation] no [capabilities] section in module.toml - \
              defaulting to all-required (0.1 behaviour). This default \
              will be removed in 0.3; add an explicit [capabilities] block."
         );
@@ -257,7 +257,7 @@ pub fn load(path: &Path) -> Result<LoadedManifest, ParseError> {
 /// Emits the same deprecation warning as a missing-section manifest.
 pub fn fallback_manifest() -> LoadedManifest {
     eprintln!(
-        "[deprecation] no module.toml found — defaulting to all-required \
+        "[deprecation] no module.toml found - defaulting to all-required \
          (0.1 behaviour). This default will be removed in 0.3; ship a \
          module.toml alongside your component."
     );
@@ -284,7 +284,7 @@ pub fn host_allowed(host: &str, allowlist: &[String]) -> bool {
 }
 
 /// Extract the host component from a URL. Returns `None` for non-http(s)
-/// schemes or malformed input. Intentionally simple — adds no `url`
+/// schemes or malformed input. Intentionally simple - adds no `url`
 /// crate dependency.
 pub fn extract_host(url: &str) -> Option<&str> {
     let after_scheme = url
