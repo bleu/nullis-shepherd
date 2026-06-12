@@ -76,9 +76,8 @@ nexum-engine --engine-config engine.toml
 state_dir = "/var/lib/shepherd"
 log_level  = "info"
 
-[[chains]]
-id  = 1
-url = "wss://mainnet.infura.io/ws/v3/..."
+[chains.1]
+rpc_url = "wss://mainnet.infura.io/ws/v3/..."
 
 [[modules]]
 path     = "modules/twap-monitor/twap-monitor.wasm"
