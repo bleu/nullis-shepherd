@@ -164,13 +164,13 @@ pub fn enforce_capabilities<'a>(
         .collect();
 
     for import_name in component_imports {
-        if let Some(cap) = wit_import_to_cap(import_name) {
-            if !declared.contains(cap) {
-                return Err(CapabilityViolation {
-                    capability: cap.to_owned(),
-                    wit_import: import_name.to_owned(),
-                });
-            }
+        if let Some(cap) = wit_import_to_cap(import_name)
+            && !declared.contains(cap)
+        {
+            return Err(CapabilityViolation {
+                capability: cap.to_owned(),
+                wit_import: import_name.to_owned(),
+            });
         }
     }
     Ok(())
