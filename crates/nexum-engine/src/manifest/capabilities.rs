@@ -4,7 +4,7 @@
 use std::collections::HashSet;
 
 use super::error::CapabilityViolation;
-use super::types::LoadedManifest;
+use super::types::{KNOWN_CAPABILITIES, LoadedManifest};
 
 /// Check that every capability-bearing WIT import of the component is covered
 /// by the module's manifest declarations. Call this after loading the
@@ -47,18 +47,28 @@ pub fn enforce_capabilities<'a>(
 }
 
 /// Map a WIT import name to a capability name, or `None` for non-capability
-/// imports (wasi:*, wasi:io, wasi:cli, etc.).
+/// imports.
+///
+/// Returns `Some(iface)` only for interfaces in [`KNOWN_CAPABILITIES`];
+/// type-only packages like `nexum:host/types` and unrelated namespaces
+/// (`wasi:*`) fall through to `None` so they do not need a manifest
+/// declaration.
 ///
 /// Examples:
-/// - `"nexum:host/chain@0.2.0"` -> `Some("chain")`
+/// - `"nexum:host/chain@0.2.0"`     -> `Some("chain")`
 /// - `"shepherd:cow/cow-api@0.2.0"` -> `Some("cow-api")`
-/// - `"wasi:io/streams@0.2.0"` -> `None`
+/// - `"nexum:host/types@0.2.0"`     -> `None` (type-only, not a capability)
+/// - `"wasi:io/streams@0.2.0"`      -> `None`
 pub(super) fn wit_import_to_cap(import_name: &str) -> Option<&str> {
-    // Strip version suffix (everything from '@' onwards).
     let without_version = import_name.split('@').next().unwrap_or(import_name);
-    without_version
+    let iface = without_version
         .strip_prefix("nexum:host/")
-        .or_else(|| without_version.strip_prefix("shepherd:cow/"))
+        .or_else(|| without_version.strip_prefix("shepherd:cow/"))?;
+    if KNOWN_CAPABILITIES.contains(&iface) {
+        Some(iface)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
