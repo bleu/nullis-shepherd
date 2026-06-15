@@ -1,0 +1,59 @@
+sequenceDiagram
+    autonumber
+    actor Op as Operator
+    participant Bin as nexum-engine binary
+    participant FS as Filesystem
+    participant Trc as tracing subscriber
+    participant PP as ProviderPool
+    participant LS as LocalStore (redb)
+    participant OBP as OrderBookPool
+    participant Sup as Supervisor
+    participant Mod as Module instance(s)
+    participant EL as Event Loop
+
+    Op->>Bin: nexum-engine --engine-config engine.toml
+    Bin->>FS: read engine.toml
+    FS-->>Bin: EngineConfig { engine, chains, modules }
+
+    Bin->>Trc: init_tracing(log_level)
+    Note over Trc: RUST_LOG overrides<br/>engine.toml.log_level
+
+    Bin->>PP: ProviderPool::from_config(&cfg)
+    loop For each chain in cfg.chains
+        alt URL is ws:// or wss://
+            PP->>PP: ProviderBuilder.connect_ws(WsConnect)
+        else URL is http:// or https://
+            PP->>PP: ProviderBuilder.connect_http(Url)
+        end
+        Note over PP: Connection failure = fatal,<br/>engine refuses to start
+    end
+    PP-->>Bin: pool ready
+
+    Bin->>LS: LocalStore::open(state_dir)
+    Note over LS: Creates redb file if missing,<br/>materialises shared table.
+    LS-->>Bin: store ready
+
+    Bin->>OBP: OrderBookPool::default()
+    Note over OBP: One OrderBookApi per<br/>cowprotocol::Chain variant.
+    OBP-->>Bin: pool ready
+
+    Bin->>Sup: Supervisor::boot(cfg, host_resources)
+    loop For each [[modules]] entry in cfg.modules
+        Sup->>FS: read module.toml
+        FS-->>Sup: Manifest
+        Sup->>FS: load <module>.wasm
+        FS-->>Sup: wasm bytes
+        Sup->>Mod: wasmtime Component compile + instantiate<br/>with dedicated HostState
+        Sup->>Mod: call init(config) inside write txn
+        Mod-->>Sup: Ok or Err
+        Sup->>Sup: record subscriptions declared in manifest
+    end
+    Sup-->>Bin: modules loaded
+
+    Bin->>EL: open block + log subscriptions
+    EL->>PP: subscribe_blocks(chain_id) per unique chain
+    EL->>PP: subscribe_logs(chain_id, filter) per unique filter
+    PP-->>EL: streams ready
+
+    Bin->>EL: run_event_loop(futures::select_all)
+    Note over EL: Loop until SIGINT or SIGTERM
