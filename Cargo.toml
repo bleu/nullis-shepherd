@@ -2,6 +2,7 @@
 members = [
     "crates/nexum-engine",
     "modules/example",
+    "modules/twap-monitor",
 ]
 resolver = "2"
 
