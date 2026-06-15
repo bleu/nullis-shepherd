@@ -1,120 +1,17 @@
-//! Minimal `nexum.toml` parser and capability-enforcement helpers (0.2 scope).
+//! Parse `module.toml` from disk, validate, and emit operator-visible
+//! warnings.
 //!
-//! 0.2 intentionally ships a slim subset of the manifest spec described in
-//! the migration guide §3:
-//!
-//! - `[capabilities].required` is parsed and validated (names must be in
-//!   the known capability set; the 0.2 reference engine always provides
-//!   all of them, so this is a sanity check + future-proofing).
-//! - `[capabilities].optional` is parsed and logged; trap-stub fallback
-//!   for absent optionals is deferred to 0.3.
-//! - `[capabilities.http].allow` is parsed and consulted by the `http`
-//!   host impl before any outbound call.
-//! - `[config]` is flattened to `Vec<(String, String)>` and passed to the
-//!   module's `init`. Typed `config-value` variant is deferred to 0.3.
-//!
-//! When the manifest file is missing or has no `[capabilities]` section,
-//! a deprecation warning is emitted on stderr and the engine falls back
-//! to 0.1 behaviour (treat every linked capability as required). This
-//! fallback will be removed in 0.3.
+//! Also exposes the small URL/host helpers the `http` host backend
+//! uses to enforce the manifest's `[capabilities.http].allow` list at
+//! request time.
 
 use std::collections::HashSet;
 use std::path::Path;
 
-use serde::Deserialize;
+use super::error::ParseError;
+use super::types::{KNOWN_CAPABILITIES, LoadedManifest, Manifest};
 
-/// Capability names recognised by the 0.2 reference engine. Matches the
-/// interfaces the `shepherd` world links into the linker.
-pub const KNOWN_CAPABILITIES: &[&str] = &[
-    "chain",
-    "identity",
-    "local-store",
-    "remote-store",
-    "messaging",
-    "logging",
-    "clock",
-    "random",
-    "http",
-    // Domain-extension caps (provided by the shepherd world only):
-    "cow-api",
-];
-
-#[derive(Debug, Deserialize, Default)]
-pub struct Manifest {
-    #[serde(default)]
-    pub module: ModuleSection,
-    #[serde(default)]
-    pub capabilities: Option<CapabilitiesSection>,
-    #[serde(default)]
-    pub config: toml::Table,
-}
-
-#[derive(Debug, Deserialize, Default)]
-#[allow(dead_code)] // version + component parsed for future 0.3 hash-verification.
-pub struct ModuleSection {
-    #[serde(default)]
-    pub name: String,
-    #[serde(default)]
-    pub version: String,
-    #[serde(default)]
-    pub component: String,
-}
-
-#[derive(Debug, Deserialize, Default)]
-pub struct CapabilitiesSection {
-    #[serde(default)]
-    pub required: Vec<String>,
-    #[serde(default)]
-    pub optional: Vec<String>,
-    #[serde(default)]
-    pub http: Option<HttpSection>,
-}
-
-#[derive(Debug, Deserialize, Default)]
-pub struct HttpSection {
-    #[serde(default)]
-    pub allow: Vec<String>,
-}
-
-/// Errors returned while loading or validating a manifest.
-#[derive(Debug)]
-pub enum ParseError {
-    Io(std::io::Error),
-    Toml(toml::de::Error),
-    UnknownCapability(String),
-}
-
-impl std::fmt::Display for ParseError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Io(e) => write!(f, "manifest: i/o: {e}"),
-            Self::Toml(e) => write!(f, "manifest: parse: {e}"),
-            Self::UnknownCapability(name) => write!(
-                f,
-                "manifest: unknown capability {:?} in [capabilities].required (known: {})",
-                name,
-                KNOWN_CAPABILITIES.join(", ")
-            ),
-        }
-    }
-}
-
-impl std::error::Error for ParseError {}
-
-/// Loaded + validated manifest, plus its source path for diagnostics.
-pub struct LoadedManifest {
-    pub manifest: Manifest,
-    /// Hosts to allow for `http::fetch`. Each entry is either an exact
-    /// hostname or a `*.suffix` wildcard.
-    pub http_allowlist: Vec<String>,
-    /// `[config]` flattened to `(key, stringified-value)` pairs ready to
-    /// hand to a module's `init`. TOML scalars (string, integer, float,
-    /// boolean) become their text form. Arrays and tables are rendered as
-    /// their TOML representation.
-    pub config: Vec<(String, String)>,
-}
-
-/// Read `nexum.toml` from `path`, parse, validate, and emit a deprecation
+/// Read `module.toml` from `path`, parse, validate, and emit a deprecation
 /// warning if `[capabilities]` is absent (0.1-compat fallback).
 pub fn load(path: &Path) -> Result<LoadedManifest, ParseError> {
     let raw = std::fs::read_to_string(path).map_err(ParseError::Io)?;
@@ -123,10 +20,9 @@ pub fn load(path: &Path) -> Result<LoadedManifest, ParseError> {
     let caps = manifest.capabilities.as_ref();
     if caps.is_none() {
         eprintln!(
-            "[deprecation] no [capabilities] section in nexum.toml — \
+            "[deprecation] no [capabilities] section in module.toml - \
              defaulting to all-required (0.1 behaviour). This default \
-             will be removed in 0.3; add an explicit [capabilities] block \
-             now."
+             will be removed in 0.3; add an explicit [capabilities] block."
         );
     }
 
@@ -173,13 +69,13 @@ pub fn load(path: &Path) -> Result<LoadedManifest, ParseError> {
     })
 }
 
-/// Synthesise a "0.1 fallback" manifest for when no `nexum.toml` is found.
+/// Synthesise a "0.1 fallback" manifest for when no `module.toml` is found.
 /// Emits the same deprecation warning as a missing-section manifest.
 pub fn fallback_manifest() -> LoadedManifest {
     eprintln!(
-        "[deprecation] no nexum.toml found — defaulting to all-required \
+        "[deprecation] no module.toml found - defaulting to all-required \
          (0.1 behaviour). This default will be removed in 0.3; ship a \
-         nexum.toml alongside your component."
+         module.toml alongside your component."
     );
     LoadedManifest {
         manifest: Manifest::default(),
@@ -204,7 +100,7 @@ pub fn host_allowed(host: &str, allowlist: &[String]) -> bool {
 }
 
 /// Extract the host component from a URL. Returns `None` for non-http(s)
-/// schemes or malformed input. Intentionally simple — adds no `url`
+/// schemes or malformed input. Intentionally simple - adds no `url`
 /// crate dependency.
 pub fn extract_host(url: &str) -> Option<&str> {
     let after_scheme = url
@@ -235,6 +131,98 @@ fn stringify_toml_value(v: &toml::Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::manifest::types::Subscription;
+
+    #[test]
+    fn load_parses_block_and_log_subscriptions() {
+        let toml = r#"
+[module]
+name = "twap-monitor"
+
+[capabilities]
+required = ["chain", "local-store"]
+
+[[subscription]]
+kind     = "block"
+chain_id = 1
+
+[[subscription]]
+kind     = "log"
+chain_id = 1
+address  = "0xC92E8bdf79f0507f65a392b0ab4667716BFE0110"
+event_signature = "0x00000000000000000000000000000000000000000000000000000000deadbeef"
+"#;
+        let manifest: Manifest = toml::from_str(toml).expect("parse");
+        assert_eq!(manifest.module.name, "twap-monitor");
+        assert_eq!(manifest.subscriptions.len(), 2);
+        assert!(matches!(
+            &manifest.subscriptions[0],
+            Subscription::Block { chain_id: 1 }
+        ));
+        if let Subscription::Log {
+            chain_id, address, ..
+        } = &manifest.subscriptions[1]
+        {
+            assert_eq!(*chain_id, 1);
+            assert!(address.is_some());
+        } else {
+            panic!("expected Log subscription");
+        }
+    }
+
+    #[test]
+    fn load_parses_cron_subscription() {
+        let toml = r#"
+[module]
+name = "scheduler"
+
+[[subscription]]
+kind     = "cron"
+schedule = "*/5 * * * *"
+"#;
+        let manifest: Manifest = toml::from_str(toml).expect("parse");
+        assert!(matches!(
+            &manifest.subscriptions[0],
+            Subscription::Cron { .. }
+        ));
+    }
+
+    #[test]
+    fn load_rejects_unknown_capability() {
+        let toml = r#"
+[module]
+name = "bad"
+
+[capabilities]
+required = ["chain", "not-a-real-cap"]
+"#;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("module.toml");
+        std::fs::write(&path, toml).unwrap();
+        let err = load(&path).unwrap_err();
+        assert!(matches!(err, ParseError::UnknownCapability(ref name) if name == "not-a-real-cap"));
+    }
+
+    #[test]
+    fn load_parses_config_table() {
+        let toml = r#"
+[module]
+name = "example"
+
+[config]
+chain_id = 1
+label    = "mainnet"
+enabled  = true
+"#;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("module.toml");
+        std::fs::write(&path, toml).unwrap();
+        let loaded = load(&path).unwrap();
+        let config: std::collections::HashMap<_, _> = loaded.config.into_iter().collect();
+        assert_eq!(config.get("chain_id").map(String::as_str), Some("1"));
+        assert_eq!(config.get("label").map(String::as_str), Some("mainnet"));
+        assert_eq!(config.get("enabled").map(String::as_str), Some("true"));
+    }
 
     #[test]
     fn extract_host_handles_common_shapes() {

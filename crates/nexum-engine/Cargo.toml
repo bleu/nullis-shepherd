@@ -6,10 +6,56 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+# WASM Component Model runtime.
 wasmtime = { version = "45", features = ["component-model"] }
 wasmtime-wasi = "45"
+
+# Async + error plumbing.
 anyhow = "1"
+thiserror = "2"
 tokio = { version = "1", features = ["full"] }
-getrandom = "0.4"
+
+# Manifest parsing.
 serde = { version = "1", features = ["derive"] }
 toml = "1"
+serde_json = "1"
+
+# Observability. `tracing` replaces the prior `eprintln!` debug log
+# so the engine can drop into a structured log pipeline in production.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "ansi"] }
+
+# `cow-api` backend. cowprotocol pulls `OrderBookApi`, `OrderCreation`,
+# `OrderUid`, the orderbook base URL table per `Chain`, and the typed
+# error surface the host re-projects into `HostError`. Pinned to the
+# crates.io release Shepherd is shipping against.
+cowprotocol = "1.0.0-alpha"
+# REST passthrough for `cow_api::request`. cowprotocol pulls reqwest
+# transitively for its own client; we depend on it directly so the
+# import is explicit and survives any future cowprotocol feature
+# rearrangement.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# `chain` backend. Each configured chain owns a `DynProvider` built
+# from a `WsConnect`/`Http` transport so the host's `request` /
+# `request-batch` impls can hand a raw `(method, params)` pair to
+# alloy's JSON-RPC layer without reimplementing the codec.
+alloy-provider      = { version = "1.5", default-features = false, features = ["ws", "ipc", "pubsub", "reqwest"] }
+alloy-rpc-client    = { version = "1.5", default-features = false }
+alloy-rpc-types-eth = { version = "1.5", default-features = false, features = ["std"] }
+alloy-transport     = { version = "1.5", default-features = false }
+alloy-transport-ws  = { version = "1.5", default-features = false }
+alloy-primitives    = { version = "1.5", default-features = false, features = ["std", "serde"] }
+futures             = "0.3"
+
+# `local-store` backend. Per-module namespacing is enforced
+# host-side via a `[len:u8][module_name][raw_key]` prefix.
+redb = "2"
+
+# Misc.
+getrandom = "0.4"
+url = "2"
+
+[dev-dependencies]
+tempfile = "3"
+wiremock = "0.6"
