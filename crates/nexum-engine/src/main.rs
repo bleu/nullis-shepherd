@@ -97,6 +97,11 @@ async fn main() -> anyhow::Result<()> {
     // -- 5. Build the wasmtime engine + component. --
     let mut config = wasmtime::Config::new();
     config.wasm_component_model(true);
+    // Fuel metering is always on so the operator's per-event budget
+    // (`engine.toml::[engine.limits].fuel_per_event`) can trap a runaway
+    // module before it starves the host. `Store::set_fuel` below seeds
+    // the actual budget per instance.
+    config.consume_fuel(true);
     // `async_support` was deprecated in wasmtime 45 - the engine
     // resolves async on its own. Keeping the call out of the Config
     // chain silences the `deprecated` warning under
@@ -131,19 +136,38 @@ async fn main() -> anyhow::Result<()> {
     } else {
         loaded.manifest.module.name.clone()
     };
+    let module_store = local_store
+        .module(&module_namespace)
+        .with_context(|| format!("open local-store view for module {module_namespace:?}"))?;
+
+    let limits_cfg = engine_cfg.engine.limits;
+    let memory_cap = usize::try_from(limits_cfg.memory()).unwrap_or(usize::MAX);
+    let limits = wasmtime::StoreLimitsBuilder::new()
+        .memory_size(memory_cap)
+        .build();
 
     let mut store = Store::new(
         &engine,
         HostState {
             wasi,
             table: ResourceTable::new(),
+            limits,
             monotonic_baseline: Instant::now(),
             http_allowlist: loaded.http_allowlist,
-            module_namespace,
+            module_namespace: module_namespace.clone(),
             cow: cow_pool,
             chain: provider_pool,
-            store: local_store,
+            store: module_store,
         },
+    );
+    store.limiter(|state| &mut state.limits);
+    store
+        .set_fuel(limits_cfg.fuel())
+        .context("seed module fuel budget")?;
+    info!(
+        fuel = limits_cfg.fuel(),
+        memory_bytes = limits_cfg.memory(),
+        "applied module resource limits",
     );
 
     let inst_start = Instant::now();
@@ -169,6 +193,13 @@ async fn main() -> anyhow::Result<()> {
             "init failed",
         ),
     }
+
+    // Refuel before on_event so each event runs against a full budget,
+    // independent of how much instantiation + init consumed. The
+    // supervisor (BLEU-818) does the same per delivered event.
+    store
+        .set_fuel(limits_cfg.fuel())
+        .context("refuel for on_event")?;
 
     // Dispatch a test block event (timestamps are ms since Unix epoch, UTC).
     info!("dispatching test block event");

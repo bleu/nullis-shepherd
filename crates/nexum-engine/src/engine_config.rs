@@ -42,6 +42,12 @@ pub struct EngineSection {
     /// `info` when absent; `RUST_LOG` overrides at process start.
     #[serde(default = "default_log_level")]
     pub log_level: String,
+    /// Resource caps applied to every module store at instantiation.
+    /// `wasmtime` traps a module that overruns either; the operator
+    /// tunes the budget based on their hardware and the modules they
+    /// load.
+    #[serde(default)]
+    pub limits: ModuleLimits,
 }
 
 impl Default for EngineSection {
@@ -49,7 +55,58 @@ impl Default for EngineSection {
         Self {
             state_dir: default_state_dir(),
             log_level: default_log_level(),
+            limits: ModuleLimits::default(),
         }
+    }
+}
+
+/// Per-module resource caps the supervisor applies to each store.
+///
+/// `wasmtime` exposes two complementary knobs:
+///
+/// - **Fuel** is decremented per executed instruction (`Config::consume_fuel
+///   (true)`). When the store runs out, the module traps with `OutOfFuel`.
+///   The budget is reset before every `on_event` invocation so a single
+///   greedy event cannot starve the next one.
+/// - **Memory size** caps the module's linear memory growth, applied via
+///   `StoreLimitsBuilder::memory_size`. A module that requests more linear
+///   memory than this gets a `MemoryOutOfBounds`-class trap from
+///   `memory.grow`.
+///
+/// Both are `Option<u64>` so an unset value falls through to the engine's
+/// built-in defaults; operators only need to write the keys they actually
+/// want to override. `main.rs` reads these at instantiation; the multi-
+/// module supervisor (BLEU-818) consumes the same accessors per module
+/// store.
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+pub struct ModuleLimits {
+    /// Fuel granted before every `on_event` call. `None` -> engine default.
+    #[serde(default)]
+    pub fuel_per_event: Option<u64>,
+    /// Linear-memory ceiling per module (bytes). `None` -> engine default.
+    #[serde(default)]
+    pub memory_bytes: Option<u64>,
+}
+
+impl ModuleLimits {
+    /// Default fuel granted per `on_event` invocation (≈ 1 billion WASM
+    /// instructions). Modules that exceed this budget trap with
+    /// `OutOfFuel`.
+    pub const DEFAULT_FUEL_PER_EVENT: u64 = 1_000_000_000;
+
+    /// Default linear-memory cap per module (64 MiB). Prevents a single
+    /// runaway module from exhausting process memory.
+    pub const DEFAULT_MEMORY_BYTES: u64 = 64 * 1024 * 1024;
+
+    /// Resolved fuel budget (config override, falling back to the default).
+    pub fn fuel(&self) -> u64 {
+        self.fuel_per_event.unwrap_or(Self::DEFAULT_FUEL_PER_EVENT)
+    }
+
+    /// Resolved memory cap in bytes (config override, falling back to the
+    /// default).
+    pub fn memory(&self) -> u64 {
+        self.memory_bytes.unwrap_or(Self::DEFAULT_MEMORY_BYTES)
     }
 }
 

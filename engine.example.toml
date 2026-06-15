@@ -13,6 +13,20 @@ state_dir = "./data"
 # overrides at process start.
 log_level = "info"
 
+# Resource caps applied to every module store. wasmtime traps a module
+# that overruns either limit; the supervisor then logs and continues on
+# the next event. Both keys are optional — omitting one falls back to
+# the engine's compiled-in default. Tune up for compute-heavy modules
+# (eth_call orchestration, signature recovery loops), tune down on
+# shared hosts where one greedy module must not starve the others.
+[engine.limits]
+# Fuel budget granted before every `on_event` invocation. 1 unit ~=
+# 1 wasm instruction. 1 billion ~= ~1 second of pure compute on a
+# modern CPU.
+fuel_per_event = 1_000_000_000
+# Linear-memory ceiling per module, in bytes. Default 64 MiB.
+memory_bytes = 67_108_864
+
 # One [chains.<id>] table per chain the engine should be able to talk
 # to. Chain ids are EVM decimal. `ws://` and `wss://` URLs engage
 # alloy's pubsub transport (needed for `eth_subscribe`); `http://` and

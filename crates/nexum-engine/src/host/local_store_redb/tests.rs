@@ -9,40 +9,39 @@ fn fresh() -> (tempfile::TempDir, LocalStore) {
 #[test]
 fn set_get_roundtrip() {
     let (_dir, store) = fresh();
-    store.set("twap", "k", b"v").unwrap();
-    assert_eq!(store.get("twap", "k").unwrap().as_deref(), Some(&b"v"[..]));
+    let twap = store.module("twap").unwrap();
+    twap.set("k", b"v").unwrap();
+    assert_eq!(twap.get("k").unwrap().as_deref(), Some(&b"v"[..]));
 }
 
 #[test]
 fn namespaces_isolate_modules() {
     let (_dir, store) = fresh();
-    store.set("a", "k", b"from-a").unwrap();
-    store.set("b", "k", b"from-b").unwrap();
-    assert_eq!(
-        store.get("a", "k").unwrap().as_deref(),
-        Some(&b"from-a"[..])
-    );
-    assert_eq!(
-        store.get("b", "k").unwrap().as_deref(),
-        Some(&b"from-b"[..])
-    );
+    let a = store.module("a").unwrap();
+    let b = store.module("b").unwrap();
+    a.set("k", b"from-a").unwrap();
+    b.set("k", b"from-b").unwrap();
+    assert_eq!(a.get("k").unwrap().as_deref(), Some(&b"from-a"[..]));
+    assert_eq!(b.get("k").unwrap().as_deref(), Some(&b"from-b"[..]));
 }
 
 #[test]
 fn delete_then_get_is_none() {
     let (_dir, store) = fresh();
-    store.set("twap", "k", b"v").unwrap();
-    store.delete("twap", "k").unwrap();
-    assert!(store.get("twap", "k").unwrap().is_none());
+    let twap = store.module("twap").unwrap();
+    twap.set("k", b"v").unwrap();
+    twap.delete("k").unwrap();
+    assert!(twap.get("k").unwrap().is_none());
 }
 
 #[test]
 fn list_keys_strips_namespace_prefix() {
     let (_dir, store) = fresh();
-    store.set("twap", "posted:1", b"x").unwrap();
-    store.set("twap", "posted:2", b"y").unwrap();
-    store.set("twap", "other", b"z").unwrap();
-    let keys = store.list_keys("twap", "posted:").unwrap();
+    let twap = store.module("twap").unwrap();
+    twap.set("posted:1", b"x").unwrap();
+    twap.set("posted:2", b"y").unwrap();
+    twap.set("other", b"z").unwrap();
+    let keys = twap.list_keys("posted:").unwrap();
     assert_eq!(keys.len(), 2);
     assert!(keys.iter().all(|k| k.starts_with("posted:")));
 }
@@ -50,31 +49,45 @@ fn list_keys_strips_namespace_prefix() {
 #[test]
 fn rejects_empty_namespace() {
     let (_dir, store) = fresh();
-    let err = store.set("", "k", b"v").unwrap_err();
+    let err = store.module("").unwrap_err();
     assert!(matches!(err, StorageError::InvalidNamespace(_)));
 }
 
 #[test]
 fn prefix_is_fixed_32_bytes() {
-    let short = namespace_prefix("a").unwrap();
-    let long = namespace_prefix(&"a".repeat(300)).unwrap();
-    assert_eq!(short.len(), PREFIX_LEN);
-    assert_eq!(long.len(), PREFIX_LEN);
+    let (_dir, store) = fresh();
+    let short = store.module("a").unwrap();
+    let long = store.module(&"a".repeat(300)).unwrap();
+    assert_eq!(short.prefix.len(), PREFIX_LEN);
+    assert_eq!(long.prefix.len(), PREFIX_LEN);
     // Different inputs produce different prefixes.
-    assert_ne!(short, long);
+    assert_ne!(short.prefix, long.prefix);
 }
 
 #[test]
 fn prefix_is_deterministic() {
-    let p1 = namespace_prefix("twap-monitor").unwrap();
-    let p2 = namespace_prefix("twap-monitor").unwrap();
-    assert_eq!(p1, p2);
+    let (_dir, store) = fresh();
+    let m1 = store.module("twap-monitor").unwrap();
+    let m2 = store.module("twap-monitor").unwrap();
+    assert_eq!(m1.prefix, m2.prefix);
 }
 
 #[test]
 fn similar_names_differ() {
     // Verify that names that share a common prefix don't collide.
-    let pa = namespace_prefix("module-a").unwrap();
-    let pb = namespace_prefix("module-b").unwrap();
-    assert_ne!(pa, pb);
+    let (_dir, store) = fresh();
+    let pa = store.module("module-a").unwrap();
+    let pb = store.module("module-b").unwrap();
+    assert_ne!(pa.prefix, pb.prefix);
+}
+
+#[test]
+fn module_handles_share_underlying_data() {
+    // Two `ModuleStore` handles for the same name see the same data —
+    // confirms cloning is just an Arc bump, not a fresh DB view.
+    let (_dir, store) = fresh();
+    let m1 = store.module("twap").unwrap();
+    let m2 = store.module("twap").unwrap();
+    m1.set("k", b"v").unwrap();
+    assert_eq!(m2.get("k").unwrap().as_deref(), Some(&b"v"[..]));
 }
