@@ -12,15 +12,17 @@ repository = "https://github.com/nullisLabs/shepherd"
 
 # `cowprotocol` v1.0.0-alpha.3 (the crates.io release the engine
 # depends on) was cut from `cowdao-grants/cow-rs` PR #5 at commit
-# `1742ffa`. `bleu/cow-rs` main has 18 commits since, including the
+# `1742ffa`. `bleu/cow-rs` main has diverged since with: the
 # `composable::Proof` width fix (relevant to the TWAP poll path),
-# `OrderCreation` zero-from-address fast-fail (closes a MEDIUM
-# review finding from PR #5), and the `order_book` / `composable`
-# submodule splits. Patching to that commit picks them up without
-# waiting for an alpha.4 publish. Drop once `cowprotocol >= 1.0.0-alpha.4`
-# ships.
+# `OrderCreation` zero-from-address fast-fail, the `order_book` /
+# `composable` submodule splits, `OrderPostErrorKind` + `retry_hint()`
+# (BLEU-822, the protocol-level retry contract M2 modules dispatch
+# on), and `OrderBookApi::with_base_url(chain, base_url)` for barn /
+# staging routing (BLEU-823). Patching to that commit picks the lot
+# up without waiting for an alpha.4 publish. Drop once
+# `cowprotocol >= 1.0.0-alpha.4` ships.
 [patch.crates-io]
-cowprotocol = { git = "https://github.com/bleu/cow-rs", rev = "c012404ffefc411bff543d2290e19ba7fbef2516" }
+cowprotocol = { git = "https://github.com/bleu/cow-rs", rev = "57f5f553ab28c9fff54089daf2d39b4282f3e4dd" }
 
 [profile.dev]
 panic = "abort"
