@@ -28,15 +28,9 @@ pub(crate) fn internal_error(domain: &str, detail: impl Into<String>) -> HostErr
     }
 }
 
-/// Lowercase hex encoder. Kept in the engine binary rather than
-/// pulling a `hex` crate just for one call site. Writes into the
-/// pre-allocated buffer to avoid the per-byte `String` allocation
-/// `format!("{b:02x}")` would do.
+/// Lowercase hex encoder. Re-exports `alloy_primitives::hex::encode`
+/// (already in the workspace dep graph for the chain backend) so the
+/// engine does not roll its own per-byte `write!` loop.
 pub(crate) fn hex_encode(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        write!(s, "{b:02x}").expect("writing to String never fails");
-    }
-    s
+    alloy_primitives::hex::encode(bytes)
 }

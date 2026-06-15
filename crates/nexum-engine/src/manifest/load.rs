@@ -14,8 +14,8 @@ use super::types::{KNOWN_CAPABILITIES, LoadedManifest, Manifest};
 /// Read `module.toml` from `path`, parse, validate, and emit a deprecation
 /// warning if `[capabilities]` is absent (0.1-compat fallback).
 pub fn load(path: &Path) -> Result<LoadedManifest, ParseError> {
-    let raw = std::fs::read_to_string(path).map_err(ParseError::Io)?;
-    let manifest: Manifest = toml::from_str(&raw).map_err(ParseError::Toml)?;
+    let raw = std::fs::read_to_string(path)?;
+    let manifest: Manifest = toml::from_str(&raw)?;
 
     let caps = manifest.capabilities.as_ref();
     if caps.is_none() {
@@ -30,7 +30,7 @@ pub fn load(path: &Path) -> Result<LoadedManifest, ParseError> {
         let known: HashSet<&str> = KNOWN_CAPABILITIES.iter().copied().collect();
         for name in c.required.iter().chain(c.optional.iter()) {
             if !known.contains(name.as_str()) {
-                return Err(ParseError::UnknownCapability(name.clone()));
+                return Err(ParseError::UnknownCapability { name: name.clone() });
             }
         }
         if !c.required.is_empty() {

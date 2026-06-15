@@ -62,10 +62,10 @@ impl ProviderPool {
         })
     }
 
-    /// Empty pool - used by tests and as a default when no
-    /// `engine.toml` is found. Every `request` call returns
-    /// `UnknownChain`.
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// Empty pool used by tests. Every `request` call returns
+    /// `UnknownChain`. Gated behind `#[cfg(test)]` so the non-test
+    /// build does not link an unused constructor.
+    #[cfg(test)]
     pub fn empty() -> Self {
         Self {
             providers: Arc::new(BTreeMap::new()),
