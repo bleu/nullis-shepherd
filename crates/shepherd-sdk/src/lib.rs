@@ -85,7 +85,6 @@ pub mod cow;
 pub mod host;
 pub mod prelude;
 
-
 #[cfg(test)]
 mod tests {
     //! The skeleton has no behaviour to exercise; this test just

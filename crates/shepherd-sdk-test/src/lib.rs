@@ -225,7 +225,9 @@ impl LocalStoreHost for MockLocalStore {
         Ok(self.rows.borrow().get(key).cloned())
     }
     fn set(&self, key: &str, value: &[u8]) -> Result<(), HostError> {
-        self.rows.borrow_mut().insert(key.to_string(), value.to_vec());
+        self.rows
+            .borrow_mut()
+            .insert(key.to_string(), value.to_vec());
         Ok(())
     }
     fn delete(&self, key: &str) -> Result<(), HostError> {
@@ -300,10 +302,12 @@ impl CowApiHost for MockCowApi {
             chain_id,
             body: body.to_vec(),
         });
-        self.response
-            .borrow()
-            .clone()
-            .unwrap_or_else(|| Err(HostError::unsupported("cow-api", "MockCowApi: no response configured")))
+        self.response.borrow().clone().unwrap_or_else(|| {
+            Err(HostError::unsupported(
+                "cow-api",
+                "MockCowApi: no response configured",
+            ))
+        })
     }
 }
 
@@ -340,7 +344,11 @@ impl MockLogging {
 
     /// Count of lines at `level`.
     pub fn count_at(&self, level: LogLevel) -> usize {
-        self.lines.borrow().iter().filter(|l| l.level == level).count()
+        self.lines
+            .borrow()
+            .iter()
+            .filter(|l| l.level == level)
+            .count()
     }
 }
 
