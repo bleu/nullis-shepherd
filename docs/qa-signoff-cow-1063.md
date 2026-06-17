@@ -1,4 +1,4 @@
-# Internal QA sign-off — pre-upstream review pass
+# Internal QA sign-off - pre-upstream review pass
 
 **Tracking issue**: [COW-1063](https://linear.app/bleu-builders/issue/COW-1063)
 **Branch**: `qa/cleanup-cow-1063` (tip of M2 + M3 stack)
@@ -15,7 +15,7 @@
 | Em-dashes in `wit/**.wit` | ⚠ | 3 in mfw78's M1 prose. Intentionally left alone; flag for him in upstream review. |
 | `warn(unused_crate_dependencies)` on every crate root | ✅ | sdk, sdk-test, nexum-engine, twap, ethflow, price-alert, balance-tracker, stop-loss. |
 | WASM build (`wasm32-wasip2 --release`) | ✅ | All 5 modules build. Sizes: twap 314 KB, ethflow 282 KB, stop-loss 311 KB, price-alert 215 KB, balance-tracker 102 KB. |
-| String-wrapped errors outside WIT boundary | ✅ | All hits in `crates/nexum-engine/src/host/impls/*` (FFI boundary — exception per rust-idiomatic skill). No leaks in SDK or modules. |
+| String-wrapped errors outside WIT boundary | ✅ | All hits in `crates/nexum-engine/src/host/impls/*` (FFI boundary - exception per rust-idiomatic skill). No leaks in SDK or modules. |
 
 ## Per-PR shape
 
@@ -23,31 +23,31 @@
 |---|---|---|---|---|---|
 | #2-#7 | BLEU-825..830 (COW-1019..1024) | twap-monitor M2 | 13 | ❌ no split until BLEU-854 | Stacked TWAP. Strategy ↔ lib.rs split landed at #24. |
 | #8-#10 | BLEU-831..833 | ethflow-watcher M2 | 7 | ❌ no split until BLEU-855 | Split landed at #25. |
-| #11 | BLEU-834 | module.toml manifests | — | — | Both M2 modules have manifests with capability + subscription comments. ✅ |
-| #12 | BLEU-835 | shepherd-sdk skeleton | — | — | Public surface present. |
-| #13 | BLEU-840 | sdk helpers extraction | — | — | OK. |
-| #14 | BLEU-843 | M2 on SDK | — | — | M2 modules now consume `shepherd_sdk::cow` / `chain` helpers. |
-| #15 | BLEU-841 | shepherd-sdk-test (MockHost) | 8 | — | Full mock surface; matches Host trait. |
-| #16 | BLEU-844 | SDK docs | — | — | README + rustdoc on public items. **See architectural finding below.** |
-| #17 | BLEU-836 | deployment guide | — | — | `docs/06-production-hardening.md` exists. |
+| #11 | BLEU-834 | module.toml manifests | - | - | Both M2 modules have manifests with capability + subscription comments. ✅ |
+| #12 | BLEU-835 | shepherd-sdk skeleton | - | - | Public surface present. |
+| #13 | BLEU-840 | sdk helpers extraction | - | - | OK. |
+| #14 | BLEU-843 | M2 on SDK | - | - | M2 modules now consume `shepherd_sdk::cow` / `chain` helpers. |
+| #15 | BLEU-841 | shepherd-sdk-test (MockHost) | 8 | - | Full mock surface; matches Host trait. |
+| #16 | BLEU-844 | SDK docs | - | - | README + rustdoc on public items. **See architectural finding below.** |
+| #17 | BLEU-836 | deployment guide | - | - | `docs/06-production-hardening.md` exists. |
 | #18 | BLEU-846 | price-alert | 11 | ❌ no split until BLEU-851 | Refactor at #22. |
 | #19 | BLEU-847 | balance-tracker | 13 | ❌ never refactored | Acceptable: balance-tracker has no submit path, dispatch matrix simpler. **Optional follow-up: bring to same shape for consistency.** |
-| #20 | BLEU-848 | tutorial | — | — | Rewritten as guided tour at #23; reads top-to-bottom against real stop-loss source. |
-| #21 | — | rust-idiomatic compliance | — | — | em-dash purge, thiserror, warn(unused_crate_dependencies). ✅ |
+| #20 | BLEU-848 | tutorial | - | - | Rewritten as guided tour at #23; reads top-to-bottom against real stop-loss source. |
+| #21 | - | rust-idiomatic compliance | - | - | em-dash purge, thiserror, warn(unused_crate_dependencies). ✅ |
 | #22 | BLEU-851 | price-alert host-trait | 16 | ✅ | Reference shape. |
 | #23 | BLEU-852 | stop-loss | 7 | ✅ | First module with the full M3 surface (chain + local-store + cow-api + logging). |
 | #24 | BLEU-854 | twap-monitor host-trait | 20 | ✅ | Strategy split; 7 new MockHost dispatch tests. |
 | #25 | BLEU-855 | ethflow-watcher host-trait | 12 | ✅ | Strategy split; 5 new MockHost tests including PR #10 c5e4d7d regression guard. |
 
-## Architectural finding — DOC ↔ CODE divergence in M3 SDK
+## Architectural finding - DOC ↔ CODE divergence in M3 SDK
 
 **`docs/05-sdk-design.md` describes a 2-layer SDK that does not exist**:
 
-- `nexum-sdk` (universal) + `shepherd-sdk` (CoW extension) — we shipped only `shepherd-sdk`. No `nexum-sdk` crate.
-- `#[nexum::module]` / `#[shepherd::module]` proc macros — not implemented. We use raw `wit_bindgen::generate!` + `WitBindgenHost` adapter pattern.
-- Full alloy `Provider` backed by `HostTransport` — not implemented. We pass JSON-RPC method + params strings via `ChainHost::request`.
-- Typed local-store helpers (serde over raw bytes) — not implemented. Modules call `host.set(&key, &value)` with raw bytes.
-- Typed `Signer` for key management — not implemented. Modules use `Signature::PreSign` / `Signature::Eip1271`; no key custody on the module side.
+- `nexum-sdk` (universal) + `shepherd-sdk` (CoW extension) - we shipped only `shepherd-sdk`. No `nexum-sdk` crate.
+- `#[nexum::module]` / `#[shepherd::module]` proc macros - not implemented. We use raw `wit_bindgen::generate!` + `WitBindgenHost` adapter pattern.
+- Full alloy `Provider` backed by `HostTransport` - not implemented. We pass JSON-RPC method + params strings via `ChainHost::request`.
+- Typed local-store helpers (serde over raw bytes) - not implemented. Modules call `host.set(&key, &value)` with raw bytes.
+- Typed `Signer` for key management - not implemented. Modules use `Signature::PreSign` / `Signature::Eip1271`; no key custody on the module side.
 
 **Two paths**, mfw78's call:
 
@@ -61,10 +61,10 @@ Doc is currently aspirational; code is M3-scoped. They need to agree before upst
 | Item | Issue | Status |
 |---|---|---|
 | `#[non_exhaustive]` batch on SDK public enums (`HostErrorKind`, `LogLevel`, `PollOutcome`, `RetryAction`) | COW-1029 (BLEU-853) | Held until just before upstream cut. |
-| WIT-file em-dashes in upstream prose (3 occurrences) | — | Ask mfw78. |
-| balance-tracker host-trait refactor (consistency with other 4 modules) | — | Optional follow-up. |
-| PR description template (mfw78's "What does this PR do? / Why / Changes / Breaking changes / Testing / AI disclosure") | — | Cosmetic; could template-bump existing PR bodies before upstream push. |
-| ADR for the M3 Host trait surface | — | None today. Worth one short ADR (0009 candidate) capturing the strategy/lib split decision before upstream review. |
+| WIT-file em-dashes in upstream prose (3 occurrences) | - | Ask mfw78. |
+| balance-tracker host-trait refactor (consistency with other 4 modules) | - | Optional follow-up. |
+| PR description template (mfw78's "What does this PR do? / Why / Changes / Breaking changes / Testing / AI disclosure") | - | Cosmetic; could template-bump existing PR bodies before upstream push. |
+| ADR for the M3 Host trait surface | - | None today. Worth one short ADR (0009 candidate) capturing the strategy/lib split decision before upstream review. |
 
 ## Sign-off
 
