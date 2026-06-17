@@ -2,12 +2,13 @@
 //!
 //! Maps `cow_api::submit_order` failures into a typed [`RetryAction`]
 //! the lifecycle layer dispatches on. The orderbook returns a typed
-//! [`ApiError`](cowprotocol::error::ApiError) JSON body on permanent
-//! / transient failures; the host forwards that JSON in
-//! `host-error.data` (once the chain backend supports it — see ADR
-//! follow-up). Until then, [`classify_api_error`] falls back to
-//! `TryNextBlock` so a flaky orderbook does not poison still-valid
-//! orders.
+//! [`ApiError`] JSON body on permanent / transient failures; the host
+//! forwards that JSON in `host-error.data` (once the chain backend
+//! supports it — see the ADR follow-up). Until then,
+//! [`classify_api_error`] falls back to `TryNextBlock` so a flaky
+//! orderbook does not poison still-valid orders.
+//!
+//! [`ApiError`]: cowprotocol::error::ApiError
 
 use cowprotocol::error::ApiError;
 
