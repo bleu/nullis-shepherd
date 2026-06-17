@@ -52,11 +52,7 @@ pub struct Settings {
 /// (oracle RPC error, decode failure). Only host-store errors bubble
 /// up via `?` so the supervisor can surface persistence issues - all
 /// other faults log and let the next block re-poll.
-pub fn on_block<H: Host>(
-    host: &H,
-    chain_id: u64,
-    settings: &Settings,
-) -> Result<(), HostError> {
+pub fn on_block<H: Host>(host: &H, chain_id: u64, settings: &Settings) -> Result<(), HostError> {
     let price = match read_oracle(host, chain_id, settings.oracle_address) {
         Some(p) => p,
         None => return Ok(()), // logged inside read_oracle
@@ -78,10 +74,7 @@ pub fn on_block<H: Host>(
     let (creation, uid) = match build_creation(chain_id, settings) {
         Ok(x) => x,
         Err(e) => {
-            host.log(
-                LogLevel::Warn,
-                &format!("stop-loss skipped (build): {e}"),
-            );
+            host.log(LogLevel::Warn, &format!("stop-loss skipped (build): {e}"));
             return Ok(());
         }
     };
@@ -337,8 +330,8 @@ fn scale_signed(threshold_decimal: &str, decimals: u32) -> Result<I256, HostErro
     let unsigned: U256 = raw
         .parse()
         .map_err(|e| invalid(format!("trigger_price parse: {e}")))?;
-    let signed = I256::try_from(unsigned)
-        .map_err(|e| invalid(format!("trigger_price range: {e}")))?;
+    let signed =
+        I256::try_from(unsigned).map_err(|e| invalid(format!("trigger_price range: {e}")))?;
     Ok(if sign < 0 { -signed } else { signed })
 }
 
@@ -353,11 +346,19 @@ mod tests {
 
     fn settings_below(trigger_scaled: i128) -> Settings {
         Settings {
-            oracle_address: "0x694AA1769357215DE4FAC081bf1f309aDC325306".parse().unwrap(),
+            oracle_address: "0x694AA1769357215DE4FAC081bf1f309aDC325306"
+                .parse()
+                .unwrap(),
             trigger_price_scaled: I256::try_from(trigger_scaled).unwrap(),
-            owner: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8".parse().unwrap(),
-            sell_token: "0x6810e776880C02933D47DB1b9fc05908e5386b96".parse().unwrap(),
-            buy_token: "0xfff9976782d46cc05630d1f6ebab18b2324d6b14".parse().unwrap(),
+            owner: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+                .parse()
+                .unwrap(),
+            sell_token: "0x6810e776880C02933D47DB1b9fc05908e5386b96"
+                .parse()
+                .unwrap(),
+            buy_token: "0xfff9976782d46cc05630d1f6ebab18b2324d6b14"
+                .parse()
+                .unwrap(),
             sell_amount: U256::from(1_000_000_000_000_000_000_u128),
             buy_amount: U256::from(300_000_000_000_000_000_u128),
             valid_to: u32::MAX,
@@ -393,7 +394,11 @@ mod tests {
     fn idle_when_price_above_trigger() {
         let host = MockHost::new();
         let s = settings_below(/*trigger*/ 250_000_000_000);
-        program_oracle(&host, s.oracle_address, Ok(oracle_response_json(300_000_000_000)));
+        program_oracle(
+            &host,
+            s.oracle_address,
+            Ok(oracle_response_json(300_000_000_000)),
+        );
 
         on_block(&host, SEPOLIA, &s).unwrap();
 
@@ -406,7 +411,11 @@ mod tests {
     fn triggers_and_submits_once_then_dedups() {
         let host = MockHost::new();
         let s = settings_below(250_000_000_000);
-        program_oracle(&host, s.oracle_address, Ok(oracle_response_json(200_000_000_000)));
+        program_oracle(
+            &host,
+            s.oracle_address,
+            Ok(oracle_response_json(200_000_000_000)),
+        );
         let uid = programmed_uid(&s);
         host.cow_api.respond(Ok(uid.clone()));
 
@@ -414,7 +423,11 @@ mod tests {
         on_block(&host, SEPOLIA, &s).unwrap();
         assert_eq!(host.cow_api.call_count(), 1);
         assert!(host.logging.contains("TRIGGERED"));
-        assert!(host.store.snapshot().contains_key(&format!("submitted:{uid}")));
+        assert!(
+            host.store
+                .snapshot()
+                .contains_key(&format!("submitted:{uid}"))
+        );
 
         // Second block at the same price: dedup'd, no new submit.
         on_block(&host, SEPOLIA, &s).unwrap();
@@ -426,7 +439,11 @@ mod tests {
     fn permanent_submit_error_marks_dropped() {
         let host = MockHost::new();
         let s = settings_below(250_000_000_000);
-        program_oracle(&host, s.oracle_address, Ok(oracle_response_json(200_000_000_000)));
+        program_oracle(
+            &host,
+            s.oracle_address,
+            Ok(oracle_response_json(200_000_000_000)),
+        );
 
         // Orderbook returns InvalidSignature - permanent per
         // `OrderPostErrorKind::is_retriable`.
@@ -445,8 +462,17 @@ mod tests {
 
         on_block(&host, SEPOLIA, &s).unwrap();
         let uid = programmed_uid(&s);
-        assert!(host.store.snapshot().contains_key(&format!("dropped:{uid}")));
-        assert!(!host.store.snapshot().contains_key(&format!("submitted:{uid}")));
+        assert!(
+            host.store
+                .snapshot()
+                .contains_key(&format!("dropped:{uid}"))
+        );
+        assert!(
+            !host
+                .store
+                .snapshot()
+                .contains_key(&format!("submitted:{uid}"))
+        );
         assert!(host.logging.contains("dropped"));
 
         // Second block: dropped marker idles the loop.
@@ -459,7 +485,11 @@ mod tests {
     fn transient_submit_error_leaves_state_unchanged() {
         let host = MockHost::new();
         let s = settings_below(250_000_000_000);
-        program_oracle(&host, s.oracle_address, Ok(oracle_response_json(200_000_000_000)));
+        program_oracle(
+            &host,
+            s.oracle_address,
+            Ok(oracle_response_json(200_000_000_000)),
+        );
 
         let api_body = serde_json::json!({
             "errorType": "InsufficientFee",
@@ -531,7 +561,10 @@ mod tests {
         ];
         let s = parse_config(&entries).unwrap();
         assert_eq!(s.valid_to, u32::MAX);
-        assert_eq!(s.trigger_price_scaled, I256::try_from(250_000_000_000_i64).unwrap());
+        assert_eq!(
+            s.trigger_price_scaled,
+            I256::try_from(250_000_000_000_i64).unwrap()
+        );
     }
 
     #[test]

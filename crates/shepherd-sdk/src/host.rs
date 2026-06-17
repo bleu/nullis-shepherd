@@ -13,7 +13,7 @@
 //!
 //! `wit_bindgen::generate!` emits a `HostError` struct into each
 //! module's own crate, so its identity is per-module. The SDK
-//! exposes [`HostError`] (this module) with the same field shape  - 
+//! exposes [`HostError`] (this module) with the same field shape  -
 //! modules wire a one-liner `From` impl between the two so the
 //! traits stay world-neutral and the mocks compile without a wasm
 //! toolchain. See `shepherd-sdk-test`'s README for the adapter
