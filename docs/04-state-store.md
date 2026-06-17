@@ -4,26 +4,26 @@
 
 Every Nexum module has access to a persistent key-value store that survives restarts, crashes, and module updates. The store is backed by **redb** (v3.1, pure Rust, embedded, ACID, MVCC) and exposed to modules through the `local-store` WIT interface.
 
-The local store is the only durable memory a module has — WASM linear memory is wiped on every restart. Modules must be written to reconstruct their working state from the store on `init`.
+The local store is the only durable memory a module has - WASM linear memory is wiped on every restart. Modules must be written to reconstruct their working state from the store on `init`.
 
 ## redb Fundamentals
 
 | Property | Detail |
 |----------|--------|
 | Engine | Copy-on-write B-tree |
-| Concurrency | MVCC — concurrent readers, single writer, no blocking |
+| Concurrency | MVCC - concurrent readers, single writer, no blocking |
 | Durability | Crash-safe by default (fsync on commit) |
-| Transactions | Full ACID — read txns and write txns |
+| Transactions | Full ACID - read txns and write txns |
 | Key types | `&str`, `&[u8]`, integers, tuples, `Option<T>`, fixed arrays |
 | Value types | All key types + `Vec<T>`, `f32`/`f64`, `()` |
 | Size | No hard limit; v3 file format starts at ~50 KiB |
 
 ## Isolation Model
 
-Each module gets its own **redb database file**. Modules cannot read or write each other's state — enforced by filesystem-level separation.
+Each module gets its own **redb database file**. Modules cannot read or write each other's state - enforced by filesystem-level separation.
 
 ```rust
-// Runtime side — one database per module
+// Runtime side - one database per module
 fn open_module_db(module_id: &str) -> Result<Database> {
     let path = format!("/var/nexum/state/{module_id}.redb");
     Database::create(&path)
@@ -33,7 +33,7 @@ fn open_module_db(module_id: &str) -> Result<Database> {
 const LOCAL_STORE_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("state");
 ```
 
-Module identity = `name` from `nexum.toml`. If two module instances share a name, they share state (intentional — enables hot-reload with state continuity). Different modules have different names and fully isolated database files.
+Module identity = `name` from `nexum.toml`. If two module instances share a name, they share state (intentional - enables hot-reload with state continuity). Different modules have different names and fully isolated database files.
 
 ```
 /var/nexum/state/
@@ -56,7 +56,7 @@ interface local-store {
     /// Set a key-value pair. Overwrites existing value.
     /// Returns host-error { domain: "store", kind: invalid-input | internal | ... } on failure.
     /// Quota exhaustion surfaces as host-error { domain: "store", kind: invalid-input }
-    /// (or a future dedicated `quota-exceeded` kind) — see the migration guide.
+    /// (or a future dedicated `quota-exceeded` kind) - see the migration guide.
     set: func(key: string, value: list<u8>) -> result<_, host-error>;
 
     /// Delete a key. No-op if key doesn't exist.
@@ -69,7 +69,7 @@ interface local-store {
 
 In 0.1 `local-store` errors were bare `string` values. 0.2 replaces them with the unified `host-error` type (see [migration guide §2](migration/0.1-to-0.2.md#2-error-model-unification-both)) so modules can match on `host-error-kind` rather than parsing error strings.
 
-Keys are UTF-8 strings. Values are opaque bytes — the SDK provides typed wrappers (see doc 05).
+Keys are UTF-8 strings. Values are opaque bytes - the SDK provides typed wrappers (see doc 05).
 
 `list-keys` enables prefix-based namespacing within a module's state:
 
@@ -107,7 +107,7 @@ flowchart TD
     B --> C["No state changes persisted -- atomically rolled back"]
 ```
 
-This gives us **all-or-nothing semantics per call**: either all state mutations from a single `init` or `on_event` callback are applied, or none are. This is critical for correctness — a module that crashes halfway through processing a block doesn't leave behind partial state. Equally, a failed `init` during restart doesn't corrupt state from the previous version.
+This gives us **all-or-nothing semantics per call**: either all state mutations from a single `init` or `on_event` callback are applied, or none are. This is critical for correctness - a module that crashes halfway through processing a block doesn't leave behind partial state. Equally, a failed `init` during restart doesn't corrupt state from the previous version.
 
 ### Read-your-own-writes
 
@@ -123,7 +123,7 @@ This works because all operations within one event go through the same `WriteTra
 
 ### Concurrency: One Database Per Module
 
-redb allows only **one `WriteTransaction` at a time** per `Database` — a second `begin_write()` blocks until the first commits or aborts. Since modules dispatch events concurrently (doc 02), a single shared redb file would serialise all write transactions across modules, negating concurrency.
+redb allows only **one `WriteTransaction` at a time** per `Database` - a second `begin_write()` blocks until the first commits or aborts. Since modules dispatch events concurrently (doc 02), a single shared redb file would serialise all write transactions across modules, negating concurrency.
 
 **Design decision:** each module gets its own redb `Database` file:
 
@@ -134,7 +134,7 @@ redb allows only **one `WriteTransaction` at a time** per `Database` — a secon
 └── price-alert.redb
 ```
 
-This gives true write isolation — module A's transaction never blocks module B. The cost is more file handles (one per module), which is negligible for the expected module count.
+This gives true write isolation - module A's transaction never blocks module B. The cost is more file handles (one per module), which is negligible for the expected module count.
 
 Within a single module, events are already sequential (doc 02 dispatch semantics), so there is never contention on a module's own database.
 
@@ -178,7 +178,7 @@ On first load, the module's table is empty. The module's `init` function should 
 ```rust
 fn init(config: Config) -> Result<(), HostError> {
     if local_store::get("initialized")?.is_none() {
-        // First run — set up initial state
+        // First run - set up initial state
         local_store::set("initialized", &[1])?;
         local_store::set("last_block", &0u64.to_le_bytes())?;
     }
@@ -224,8 +224,8 @@ fn init(config: Config) -> Result<(), HostError> {
 ### Module Removal
 
 When an operator removes a module, its state table can optionally be:
-- **Retained** (default) — in case the module is re-added later.
-- **Purged** — operator explicitly requests deletion via CLI.
+- **Retained** (default) - in case the module is re-added later.
+- **Purged** - operator explicitly requests deletion via CLI.
 
 ```bash
 nexum state purge --module twap-monitor
@@ -294,9 +294,9 @@ impl ModuleStateCtx {
 | Key type | UTF-8 string |
 | Value type | Opaque bytes (`list<u8>` in WIT) |
 | Namespacing within module | Convention: slash-separated prefixes + `list-keys` |
-| Transaction scope | Per `init` / `on_event` call — commit on success, rollback on failure |
+| Transaction scope | Per `init` / `on_event` call - commit on success, rollback on failure |
 | Read-your-own-writes | Yes (same `WriteTransaction`) |
 | Size limit | Enforced per-module via manifest `max_state_bytes` |
-| Survives restart | Yes — state is external to WASM instance |
+| Survives restart | Yes - state is external to WASM instance |
 | Module update | New version inherits state; `init` handles migration |
 | Backup | Online copy under read transaction |
