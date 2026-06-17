@@ -9,35 +9,32 @@
 //!
 //! ## What lives here
 //!
-//! - [`prelude`] — `use shepherd_sdk::prelude::*` imports the
-//!   protocol-level types modules need on every other line: alloy
-//!   primitives ([`Address`](alloy_primitives::Address),
-//!   [`B256`](alloy_primitives::B256),
-//!   [`Bytes`](alloy_primitives::Bytes),
-//!   [`U256`](alloy_primitives::U256), [`keccak256`](
-//!   alloy_primitives::keccak256)) and cowprotocol's order /
-//!   signing surface ([`OrderCreation`](cowprotocol::OrderCreation),
-//!   [`OrderData`](cowprotocol::OrderData),
-//!   [`OrderUid`](cowprotocol::OrderUid),
-//!   [`OrderKind`](cowprotocol::OrderKind),
-//!   [`Signature`](cowprotocol::Signature),
-//!   [`Chain`](cowprotocol::Chain),
-//!   [`GPv2OrderData`](cowprotocol::GPv2OrderData),
-//!   [`EMPTY_APP_DATA_JSON`](cowprotocol::EMPTY_APP_DATA_JSON), and
-//!   the [`ApiError`](cowprotocol::ApiError) +
-//!   [`OrderPostErrorKind`](cowprotocol::error::OrderPostErrorKind)
-//!   retry contract).
+//! - [`prelude`] — `use shepherd_sdk::prelude::*` imports alloy
+//!   primitives ([`Address`], [`B256`], [`Bytes`], [`U256`],
+//!   [`keccak256`]) and cowprotocol's order / signing / orderbook
+//!   surface ([`OrderCreation`], [`OrderData`], [`OrderUid`],
+//!   [`OrderKind`], [`Signature`], [`Chain`], [`GPv2OrderData`],
+//!   [`EMPTY_APP_DATA_JSON`], [`ApiError`], [`OrderPostErrorKind`]).
 //!
-//! - [`cow`] (BLEU-840) — `GPv2OrderData` <-> `OrderData` bridging,
-//!   `IConditionalOrder` revert decoding, `RetryAction` classifier.
-//!   Stubbed in this skeleton; populated by the BLEU-840 extraction.
+//! - [`cow`] — `GPv2OrderData` -> `OrderData` bridging
+//!   ([`gpv2_to_order_data`]), `IConditionalOrder` revert decoding
+//!   ([`PollOutcome`] + [`decode_revert`]), and the
+//!   [`RetryAction`] classifier driving submit-failure dispatch.
 //!
-//! - [`chain`] (BLEU-840) — `eth_call` JSON plumbing
-//!   (`eth_call_params`, `parse_eth_call_result`, `decode_revert_hex`).
-//!   Stubbed in this skeleton; populated by the BLEU-840 extraction.
+//! - [`chain`] — `eth_call` JSON plumbing
+//!   ([`eth_call_params`], [`parse_eth_call_result`],
+//!   [`decode_revert_hex`]).
 //!
-//! - [`store`] (BLEU-840) — `WatchSet` and `BackoffLedger` helpers
-//!   per ADR-0006. Stubbed in this skeleton.
+//! - [`host`] — host trait seam ([`Host`] / [`ChainHost`] /
+//!   [`LocalStoreHost`] / [`CowApiHost`] / [`LoggingHost`]) plus a
+//!   host-neutral [`HostError`]. Modules that want host-free tests
+//!   structure their strategy logic against these traits and slot
+//!   in the `shepherd-sdk-test` mocks. See the host module docs for
+//!   the wit-bindgen adapter pattern.
+//!
+//! - `store` — placeholder for `WatchSet` / `BackoffLedger`
+//!   per ADR-0006. Populated when a second strategy module needs
+//!   the same key conventions.
 //!
 //! ## Why no `wit_bindgen::generate!` here
 //!
@@ -49,6 +46,35 @@
 //! struct; modules unpack their `HostError` on the way in. Trade-off
 //! documented in ADR-0006 / ADR-0007 — the SDK stays on the guest
 //! side, neutral to which world the module exports.
+//!
+//! [`Address`]: alloy_primitives::Address
+//! [`B256`]: alloy_primitives::B256
+//! [`Bytes`]: alloy_primitives::Bytes
+//! [`U256`]: alloy_primitives::U256
+//! [`keccak256`]: alloy_primitives::keccak256
+//! [`OrderCreation`]: cowprotocol::OrderCreation
+//! [`OrderData`]: cowprotocol::OrderData
+//! [`OrderUid`]: cowprotocol::OrderUid
+//! [`OrderKind`]: cowprotocol::OrderKind
+//! [`Signature`]: cowprotocol::Signature
+//! [`Chain`]: cowprotocol::Chain
+//! [`GPv2OrderData`]: cowprotocol::GPv2OrderData
+//! [`EMPTY_APP_DATA_JSON`]: cowprotocol::EMPTY_APP_DATA_JSON
+//! [`ApiError`]: cowprotocol::ApiError
+//! [`OrderPostErrorKind`]: cowprotocol::error::OrderPostErrorKind
+//! [`gpv2_to_order_data`]: cow::gpv2_to_order_data
+//! [`PollOutcome`]: cow::PollOutcome
+//! [`decode_revert`]: cow::decode_revert
+//! [`RetryAction`]: cow::RetryAction
+//! [`eth_call_params`]: chain::eth_call_params
+//! [`parse_eth_call_result`]: chain::parse_eth_call_result
+//! [`decode_revert_hex`]: chain::decode_revert_hex
+//! [`Host`]: host::Host
+//! [`ChainHost`]: host::ChainHost
+//! [`LocalStoreHost`]: host::LocalStoreHost
+//! [`CowApiHost`]: host::CowApiHost
+//! [`LoggingHost`]: host::LoggingHost
+//! [`HostError`]: host::HostError
 
 #![warn(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
@@ -58,11 +84,6 @@ pub mod cow;
 pub mod host;
 pub mod prelude;
 
-/// `local-store` helpers: `WatchSet`, `BackoffLedger` per ADR-0006.
-///
-/// Skeleton — populated by a follow-up to BLEU-840 once a second
-/// strategy module needs the same key conventions.
-pub mod store {}
 
 #[cfg(test)]
 mod tests {
