@@ -41,7 +41,7 @@ Modules see plain key strings on both the read and write paths; the prefix is in
 
 ## Consequences
 
-- The prefix is fixed-size (32 bytes) and independent of module name length. Range scans over a single module's keys are O(log n + module-key-count) — fine for our workload.
+- The prefix is fixed-size (32 bytes) and independent of module name length. Range scans over a single module's keys are O(log n + module-key-count) - fine for our workload.
 - Migrations changing the prefix derivation (e.g., switching the local-mode hash function or the ENS resolver) would orphan every existing module's persisted state. The derivation must stay stable through 0.x; ENS-mode introduction in 0.3 happens additively via the alias mechanism, not by changing existing prefixes.
 - A module's `list-keys` iterates over the namespace range (32-byte prefix scan); the host strips the prefix before returning to the guest.
 - Module data versioning (schema migrations across module versions) is the module's responsibility. The local-store does not version values; modules MAY embed a `schema_version` byte in their stored payloads and migrate on `init` when the read value's version differs from the current code's expectation.

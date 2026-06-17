@@ -10,7 +10,7 @@ version = "0.1.0"
 component = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 
 [capabilities]
-# Same set as twap-monitor for symmetry and future-proofing — the module
+# Same set as twap-monitor for symmetry and future-proofing - the module
 # imports logging, local-store and cow-api today; `chain` is declared
 # because a follow-up may add an eth_call (e.g. to read the EthFlow
 # refund pointer) without churning the manifest.

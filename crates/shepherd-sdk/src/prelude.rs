@@ -32,7 +32,7 @@ pub use cowprotocol::{
     SigningScheme,
 };
 
-/// Re-exported `ApiError` typed error surface from the orderbook —
+/// Re-exported `ApiError` typed error surface from the orderbook  - 
 /// guest-side helpers (BLEU-840) read this back out of host-error JSON
 /// to drive the `RetryAction` dispatch.
 pub use cowprotocol::error::{ApiError, OrderPostErrorKind};

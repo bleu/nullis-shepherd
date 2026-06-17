@@ -4,7 +4,7 @@
 //! the lifecycle layer dispatches on. The orderbook returns a typed
 //! [`ApiError`] JSON body on permanent / transient failures; the host
 //! forwards that JSON in `host-error.data` (once the chain backend
-//! supports it — see the ADR follow-up). Until then,
+//! supports it - see the ADR follow-up). Until then,
 //! [`classify_api_error`] falls back to `TryNextBlock` so a flaky
 //! orderbook does not poison still-valid orders.
 //!
@@ -24,7 +24,7 @@ pub enum RetryAction {
     /// Leave the watch / placement in place; the next event will
     /// re-attempt.
     TryNextBlock,
-    /// Persist `next_attempt = now + seconds`. Reserved — no producer
+    /// Persist `next_attempt = now + seconds`. Reserved - no producer
     /// today (kept so the dispatch contract is stable).
     #[allow(dead_code)]
     Backoff {
