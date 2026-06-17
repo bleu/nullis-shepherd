@@ -19,7 +19,7 @@ use shepherd_sdk::chain::{eth_call_params, parse_eth_call_result};
 | Module | What it provides |
 |---|---|
 | `prelude` | One-liner `use ::*` for alloy primitives + cowprotocol order / signing / orderbook surface. |
-| `cow::order` | `gpv2_to_order_data` — `GPv2OrderData` -> typed `OrderData`. |
+| `cow::order` | `gpv2_to_order_data` - `GPv2OrderData` -> typed `OrderData`. |
 | `cow::composable` | `sol! IConditionalOrder` errors + `PollOutcome` + `decode_revert`. |
 | `cow::error` | `RetryAction` enum + `classify_api_error` + `try_decode_api_error`. |
 | `chain::eth_call` | `eth_call_params`, `parse_eth_call_result`, `decode_revert_hex`. |

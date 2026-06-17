@@ -20,18 +20,18 @@ sol! {
     /// computed here match what the contract emits.
     #[derive(Debug)]
     interface IConditionalOrder {
-        /// `OrderNotValid(string)` — the order condition is permanently
+        /// `OrderNotValid(string)` - the order condition is permanently
         /// not met. Watch towers drop.
         error OrderNotValid(string reason);
-        /// `PollTryNextBlock(string)` — try again on the next block.
+        /// `PollTryNextBlock(string)` - try again on the next block.
         error PollTryNextBlock(string reason);
-        /// `PollTryAtBlock(uint256, string)` — try at or after the
+        /// `PollTryAtBlock(uint256, string)` - try at or after the
         /// given block number.
         error PollTryAtBlock(uint256 blockNumber, string reason);
-        /// `PollTryAtEpoch(uint256, string)` — try at or after the
+        /// `PollTryAtEpoch(uint256, string)` - try at or after the
         /// given Unix timestamp (seconds).
         error PollTryAtEpoch(uint256 timestamp, string reason);
-        /// `PollNever(string)` — the conditional order is dead.
+        /// `PollNever(string)` - the conditional order is dead.
         error PollNever(string reason);
     }
 }
@@ -40,7 +40,7 @@ sol! {
 /// `Ready` carries the materials the submit path needs; the other
 /// variants drive the lifecycle handler (BLEU-830).
 ///
-/// `Ready` is intentionally never produced by [`decode_revert`] — it
+/// `Ready` is intentionally never produced by [`decode_revert`] - it
 /// only comes from the successful return path the poll module
 /// constructs at the call site.
 #[derive(Debug)]
@@ -56,7 +56,7 @@ pub enum PollOutcome {
         /// orderbook prepends `from` before settlement).
         signature: Bytes,
     },
-    /// Retry on the very next block — typical for time-sliced TWAP
+    /// Retry on the very next block - typical for time-sliced TWAP
     /// schedules and other handlers that re-check on every tick.
     TryNextBlock,
     /// Retry once block number reaches the embedded value.
@@ -64,7 +64,7 @@ pub enum PollOutcome {
     /// Retry once the wall clock (Unix seconds, UTC) reaches the
     /// embedded value.
     TryAtEpoch(u64),
-    /// Order is dead — drop the watch. Aggregates `OrderNotValid` and
+    /// Order is dead - drop the watch. Aggregates `OrderNotValid` and
     /// `PollNever` reverts; the original reason string is dropped
     /// because the lifecycle handler does not key off it today.
     DontTryAgain,
@@ -74,7 +74,7 @@ pub enum PollOutcome {
 /// [`PollOutcome`].
 ///
 /// Returns `None` when the selector is not one of the five
-/// [`IConditionalOrder`] errors — including a bare `Error(string)`
+/// [`IConditionalOrder`] errors - including a bare `Error(string)`
 /// require-revert. Callers should treat that as `TryNextBlock` (the
 /// safe default) so a transient RPC blip does not drop a still-valid
 /// watch.

@@ -19,7 +19,7 @@ use cowprotocol::{
 /// the wire as `bytes32` markers (the `keccak256` of the lowercase
 /// variant name). This helper hands them off to cowprotocol's
 /// `from_contract_bytes` classifiers and returns `None` when the on-
-/// chain payload carries a marker the SDK doesn't recognise — the
+/// chain payload carries a marker the SDK doesn't recognise - the
 /// caller skips the order rather than ship a malformed body.
 ///
 /// `receiver = Address::ZERO` is normalised to `None`; `OrderCreation::

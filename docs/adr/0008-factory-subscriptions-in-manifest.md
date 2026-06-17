@@ -28,7 +28,7 @@ Combined: the dynamic-subscription design is not load-bearing for M2 deliverable
 
 ## Reference design (not adopted in 0.2)
 
-The original proposal — kept here so future discussions have a starting point — was a hybrid of static topics and dynamic addresses:
+The original proposal - kept here so future discussions have a starting point - was a hybrid of static topics and dynamic addresses:
 
 - `[[subscription.template]]` block in `module.toml` declaring `chain_id`, `name`, `event_topics` (no address).
 - `chain.register-address(chain_id, template_name, address)` host function for the module to add addresses at runtime.
