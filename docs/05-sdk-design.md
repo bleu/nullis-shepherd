@@ -1,5 +1,33 @@
 # SDK Design: Layered SDK (`nexum-sdk` + `shepherd-sdk`)
 
+> **Current implementation status (M3, 2026-06-17)**
+>
+> This document is the **0.2 / M5+ north-star** vision. M3 shipped a focused subset; everything else below is deferred to M4/M5. The split:
+>
+> | Feature | M3 status | Where |
+> |---|---|---|
+> | `shepherd-sdk` crate | ✅ shipped | `crates/shepherd-sdk/` |
+> | `shepherd-sdk-test` crate (mock host) | ✅ shipped | `crates/shepherd-sdk-test/` |
+> | Host traits (`ChainHost`, `LocalStoreHost`, `CowApiHost`, `LoggingHost`) + supertrait `Host` | ✅ shipped | `crates/shepherd-sdk/src/host.rs` (see ADR-0009) |
+> | `strategy.rs` (pure logic) + `lib.rs` (wit-bindgen adapter) recipe | ✅ shipped | every M2/M3 module |
+> | `HostError` / `HostErrorKind` (SDK-side mirror of wit) | ✅ shipped | `crates/shepherd-sdk/src/host.rs` |
+> | `chain` helpers (`eth_call_params`, `parse_eth_call_result`, `decode_revert_hex`) | ✅ shipped | `crates/shepherd-sdk/src/chain/` |
+> | `cow` helpers (`PollOutcome`, `RetryAction`, `classify_api_error`, `gpv2_to_order_data`, `decode_revert`, `IConditionalOrder`) | ✅ shipped | `crates/shepherd-sdk/src/cow/` |
+> | `MockHost` with per-trait mocks (`MockChain`, `MockLocalStore`, `MockCowApi`, `MockLogging`) | ✅ shipped | `crates/shepherd-sdk-test/src/lib.rs` |
+> | Separate `nexum-sdk` crate | ❌ deferred (M5) | only `shepherd-sdk` exists today |
+> | `#[nexum::module]` / `#[shepherd::module]` proc macros | ❌ deferred (M5) | modules write `wit_bindgen::generate!` + `WitBindgenHost` adapter by hand |
+> | Named event handlers (`on_block` / `on_logs` / `on_tick` / `on_message` injection) | ❌ deferred (M5) | modules pattern-match on `types::Event` in `Guest::on_event` |
+> | `async fn` handler support via `block_on` | ❌ deferred (M5) | strategy functions are synchronous |
+> | Full alloy `Provider` via `HostTransport` | ❌ deferred (M5) | modules call `host.request(chain_id, method, params)` with JSON strings |
+> | `TypedState` (postcard-backed typed local-store) | ❌ deferred (M5) | modules call `host.set(&key, &raw_bytes)` directly |
+> | `Signer` (ECDSA + EIP-712 via `identity` host interface) | ❌ deferred (M5) | modules use `Signature::PreSign` / `Signature::Eip1271`; no key custody on the module side |
+> | `Cow` typed CoW Protocol API client (quote / get_order / raw_request) | ❌ deferred (M5) | `cow-api` exposes only `submit-order` today |
+> | `MockIdentity`, `MockProvider`, `WasmTestHarness` | ❌ deferred (M5) | tests against `&impl Host` + per-trait mocks |
+> | `cargo nexum` CLI (new / build / package / publish) | ❌ deferred (M5) | modules use `cargo build --target wasm32-wasip2` directly |
+> | `block.timestamp` in ms | ✅ shipped | confirmed in `nexum:host/types` |
+>
+> **Reader's guide**: treat the sections below as design intent the next two milestones move toward, not API documentation for the code that exists today. For M3 API reference, see [sdk.md](sdk.md) and the rustdoc on `crates/shepherd-sdk/`. The M3 architectural decision is captured in [ADR-0009](adr/0009-host-trait-surface.md).
+
 ## Purpose
 
 The SDK is split into two layers:
