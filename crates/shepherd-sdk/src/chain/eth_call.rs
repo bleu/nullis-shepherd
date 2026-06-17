@@ -9,6 +9,23 @@ use crate::cow::composable::{PollOutcome, decode_revert};
 /// Returned as a `String` rather than `serde_json::Value` so the caller
 /// can hand it straight to `chain::request(chain_id, "eth_call", &p)`
 /// without re-serialising.
+///
+/// # Example
+///
+/// ```
+/// use shepherd_sdk::chain::eth_call_params;
+/// use shepherd_sdk::prelude::Address;
+///
+/// let to: Address = "0xfdaFc9d1902f4e0b84f65F49f244b32b31013b74"
+///     .parse()
+///     .unwrap();
+/// let selector = [0xaa, 0xbb, 0xcc, 0xdd]; // 4-byte function selector
+/// let params = eth_call_params(&to, &selector);
+///
+/// assert!(params.contains("\"to\":\"0xfdafc9d1902f4e0b84f65f49f244b32b31013b74\""));
+/// assert!(params.contains("\"data\":\"0xaabbccdd\""));
+/// assert!(params.contains("\"latest\""));
+/// ```
 pub fn eth_call_params(to: &Address, data: &[u8]) -> String {
     let to_hex = format!("{to:#x}");
     let data_hex = alloy_primitives::hex::encode_prefixed(data);
@@ -19,6 +36,23 @@ pub fn eth_call_params(to: &Address, data: &[u8]) -> String {
 /// returns for an `eth_call`. The value is a JSON string holding hex
 /// like `"0x1234..."`; strip the JSON quotes, strip the `0x` prefix,
 /// and hex-decode. Returns `None` on shape mismatch.
+///
+/// # Example
+///
+/// ```
+/// use shepherd_sdk::chain::parse_eth_call_result;
+///
+/// // What the host typically returns for an eth_call result: a JSON
+/// // string holding 0x-prefixed hex.
+/// let raw = r#""0xdeadbeef""#;
+/// assert_eq!(
+///     parse_eth_call_result(raw),
+///     Some(vec![0xde, 0xad, 0xbe, 0xef]),
+/// );
+///
+/// // Shape mismatch (not JSON-quoted) -> None.
+/// assert_eq!(parse_eth_call_result("not json"), None);
+/// ```
 pub fn parse_eth_call_result(result_json: &str) -> Option<Vec<u8>> {
     let s = serde_json::from_str::<String>(result_json).ok()?;
     let hex = s.strip_prefix("0x").unwrap_or(&s);
@@ -32,6 +66,26 @@ pub fn parse_eth_call_result(result_json: &str) -> Option<Vec<u8>> {
 /// This is the bridge between the host's structured error data (a hex
 /// string in `host-error.data`) and the typed
 /// [`crate::cow::composable::PollOutcome`] dispatch.
+///
+/// # Example
+///
+/// ```
+/// use alloy_sol_types::SolError;
+/// use shepherd_sdk::chain::decode_revert_hex;
+/// use shepherd_sdk::cow::{IConditionalOrder, PollOutcome};
+///
+/// // Simulate the host forwarding an OrderNotValid revert payload.
+/// let revert = IConditionalOrder::OrderNotValid {
+///     reason: "expired".into(),
+/// }
+/// .abi_encode();
+/// let host_data = format!("\"0x{}\"", alloy_primitives::hex::encode(&revert));
+///
+/// assert!(matches!(
+///     decode_revert_hex(&host_data),
+///     Some(PollOutcome::DontTryAgain),
+/// ));
+/// ```
 pub fn decode_revert_hex(s: &str) -> Option<PollOutcome> {
     let stripped = s.trim_matches('"');
     let stripped = stripped.strip_prefix("0x").unwrap_or(stripped);
