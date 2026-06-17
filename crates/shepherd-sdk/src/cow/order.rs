@@ -7,9 +7,7 @@
 //! into Rust enums. [`gpv2_to_order_data`] is the bridge.
 
 use alloy_primitives::Address;
-use cowprotocol::{
-    BuyTokenDestination, GPv2OrderData, OrderData, OrderKind, SellTokenSource,
-};
+use cowprotocol::{BuyTokenDestination, GPv2OrderData, OrderData, OrderKind, SellTokenSource};
 
 /// Convert a freshly-polled / freshly-placed [`GPv2OrderData`] into the
 /// typed [`OrderData`] shape `OrderCreation::from_signed_order_data`

@@ -115,7 +115,8 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let block_streams = runtime::event_loop::open_block_streams(&provider_pool, &block_chains).await;
+    let block_streams =
+        runtime::event_loop::open_block_streams(&provider_pool, &block_chains).await;
     let log_streams = runtime::event_loop::open_log_streams(&provider_pool, log_subs).await;
 
     let shutdown = async {
