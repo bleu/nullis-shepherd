@@ -55,6 +55,7 @@
 
 pub mod chain;
 pub mod cow;
+pub mod host;
 pub mod prelude;
 
 /// `local-store` helpers: `WatchSet`, `BackoffLedger` per ADR-0006.
