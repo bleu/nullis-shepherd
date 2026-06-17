@@ -1,4 +1,4 @@
-//! Host traits — the seam between strategy logic and the wit-bindgen
+//! Host traits - the seam between strategy logic and the wit-bindgen
 //! shims a module generates per-cdylib.
 //!
 //! Each trait mirrors one nexum / shepherd host interface
@@ -13,7 +13,7 @@
 //!
 //! `wit_bindgen::generate!` emits a `HostError` struct into each
 //! module's own crate, so its identity is per-module. The SDK
-//! exposes [`HostError`] (this module) with the same field shape —
+//! exposes [`HostError`] (this module) with the same field shape  - 
 //! modules wire a one-liner `From` impl between the two so the
 //! traits stay world-neutral and the mocks compile without a wasm
 //! toolchain. See `shepherd-sdk-test`'s README for the adapter
@@ -29,9 +29,9 @@ pub enum LogLevel {
     Debug,
     /// Steady-state events.
     Info,
-    /// Recoverable errors — operator notice but no immediate action.
+    /// Recoverable errors - operator notice but no immediate action.
     Warn,
-    /// Unrecoverable errors — operator should investigate.
+    /// Unrecoverable errors - operator should investigate.
     Error,
 }
 
@@ -59,7 +59,8 @@ pub enum HostErrorKind {
 /// SDK-side counterpart to wit-bindgen's `HostError`. Same field shape
 /// so a module bridges between the two with a trivial `From` impl on
 /// each side.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("{domain}: {message} (code={code}, kind={kind:?})")]
 pub struct HostError {
     /// Short subsystem identifier (`"chain"`, `"local-store"`,
     /// `"cow-api"`, `"logging"`).
@@ -88,7 +89,7 @@ impl HostError {
     }
 }
 
-/// `nexum:host/chain` — raw JSON-RPC dispatch.
+/// `nexum:host/chain` - raw JSON-RPC dispatch.
 pub trait ChainHost {
     /// Execute a JSON-RPC request against the given chain. The host
     /// routes to its configured provider; the SDK does not care which
@@ -96,7 +97,7 @@ pub trait ChainHost {
     fn request(&self, chain_id: u64, method: &str, params: &str) -> Result<String, HostError>;
 }
 
-/// `nexum:host/local-store` — per-module key-value persistence.
+/// `nexum:host/local-store` - per-module key-value persistence.
 pub trait LocalStoreHost {
     /// Fetch a value. `Ok(None)` when the key is absent.
     fn get(&self, key: &str) -> Result<Option<Vec<u8>>, HostError>;
@@ -108,14 +109,14 @@ pub trait LocalStoreHost {
     fn list_keys(&self, prefix: &str) -> Result<Vec<String>, HostError>;
 }
 
-/// `shepherd:cow/cow-api` — orderbook submission path.
+/// `shepherd:cow/cow-api` - orderbook submission path.
 pub trait CowApiHost {
     /// Submit an `OrderCreation` JSON body. The host returns the
     /// canonical order UID on success.
     fn submit_order(&self, chain_id: u64, body: &[u8]) -> Result<String, HostError>;
 }
 
-/// `nexum:host/logging` — structured runtime logs.
+/// `nexum:host/logging` - structured runtime logs.
 pub trait LoggingHost {
     /// Emit a log line at the given level.
     fn log(&self, level: LogLevel, message: &str);

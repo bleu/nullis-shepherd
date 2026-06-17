@@ -52,9 +52,10 @@
 //! The traits use [`shepherd_sdk::host::HostError`] rather than the
 //! `HostError` `wit_bindgen::generate!` emits per-module. A module
 //! bridges with two trivial `From` impls (one each direction) on its
-//! own crate boundary — see the M3 tutorial (BLEU-848) for the exact
+//! own crate boundary - see the M3 tutorial (BLEU-848) for the exact
 //! shape.
 
+#![cfg_attr(not(test), warn(unused_crate_dependencies))]
 #![warn(missing_docs)]
 
 use std::cell::RefCell;
@@ -213,7 +214,7 @@ impl MockLocalStore {
         self.rows.borrow().is_empty()
     }
 
-    /// Direct read for assertions — bypasses the trait.
+    /// Direct read for assertions - bypasses the trait.
     pub fn snapshot(&self) -> HashMap<String, Vec<u8>> {
         self.rows.borrow().clone()
     }

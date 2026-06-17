@@ -40,7 +40,7 @@ cargo run -p nexum-engine -- \
   modules/example/nexum.toml
 ```
 
-You should see two log lines from the example module — one in
+You should see two log lines from the example module - one in
 `init`, one on the synthetic block event. Stop here and triage if
 the build fails or those log lines do not appear; the rest of the
 tutorial assumes a working local engine.
@@ -81,13 +81,13 @@ shepherd-sdk-test = { path = "../../../crates/shepherd-sdk-test" }
 
 Note the four key features:
 
-- **`crate-type = ["cdylib"]`** — produces a WASM Component when
+- **`crate-type = ["cdylib"]`** - produces a WASM Component when
   built for `wasm32-wasip2`.
-- **`shepherd-sdk` path dep** — brings in the helpers (`cow::`,
+- **`shepherd-sdk` path dep** - brings in the helpers (`cow::`,
   `chain::`, `host::`, `prelude`).
-- **`shepherd-sdk-test` as a dev-dep** — `MockHost` + assertion
+- **`shepherd-sdk-test` as a dev-dep** - `MockHost` + assertion
   helpers, only linked under `cargo test`.
-- **No direct `nexum-engine` dep** — modules never link the engine;
+- **No direct `nexum-engine` dep** - modules never link the engine;
   they communicate via wit-bindgen-generated shims.
 
 Add the new crate to the workspace `members` list in `Cargo.toml`
@@ -102,7 +102,7 @@ members = [
 ```
 
 `cargo check --target wasm32-wasip2 -p stop-loss` should fail with
-"no library targets found" — expected, you have not written any
+"no library targets found" - expected, you have not written any
 source yet.
 
 ## 2. Author the manifest (10 minutes)
@@ -148,7 +148,7 @@ valid_to_seconds = "4294967295"          # u32::MAX (no expiry)
 Two patterns worth noting:
 
 - **`required` matches the WIT imports the module uses.** The
-  engine enforces this at instantiation — declaring a capability
+  engine enforces this at instantiation - declaring a capability
   the module does not use is fine; missing a capability the module
   does use is a hard error.
 - **`[config]` values are stringly-typed in 0.2.** Your `init`
@@ -160,7 +160,7 @@ Two patterns worth noting:
 The strategy logic splits into two layers:
 
 - A pure function that takes `&impl Host` and runs the decision
-  tree. This is what your tests exercise — no `wit-bindgen`, no
+  tree. This is what your tests exercise - no `wit-bindgen`, no
   `wasmtime`, fast iteration.
 - A thin `Guest` impl in `lib.rs` that adapts the wit-bindgen-
   generated host imports into a struct implementing
@@ -261,7 +261,7 @@ The shape to internalise:
   and assert on the side effects (calls + log lines + state writes).
 - **Errors propagate but the loop should not abort on transient
   failure.** Wrap upstream calls so a single bad event does not
-  poison the supervisor — see `price-alert`'s warn-and-return
+  poison the supervisor - see `price-alert`'s warn-and-return
   pattern.
 
 ### 3b. The Guest adapter (15 minutes)
@@ -491,7 +491,7 @@ mod tests {
 ```
 
 Run with `cargo test -p stop-loss`. Both tests should pass on a
-plain host — no wasm toolchain involved.
+plain host - no wasm toolchain involved.
 
 The takeaway: any time you can express a behaviour as "given this
 host state, do that", the `MockHost` route is faster to iterate
@@ -505,7 +505,7 @@ ls -lh target/wasm32-wasip2/release/stop_loss.wasm
 ```
 
 Expected size: 250–350 KB. If it ballooned past ~500 KB, look at
-`cargo tree -p stop-loss --target wasm32-wasip2` — usually a fresh
+`cargo tree -p stop-loss --target wasm32-wasip2` - usually a fresh
 dependency pulled `reqwest` or `tokio` into the wasm graph.
 
 ## 5. Wire `engine.toml` and run it (10 minutes)
@@ -546,7 +546,7 @@ imports the strategy actually uses.
   (see [`docs/deployment.md`](./deployment.md)).
 - **Real order assembly**: the `build_order_body` `todo!` in §3a
   is the only piece this tutorial elided. Cross-reference
-  [`modules/twap-monitor/src/lib.rs::build_order_creation`] —
+  [`modules/twap-monitor/src/lib.rs::build_order_creation`]  - 
   it's the canonical assembly path
   (`cowprotocol::OrderCreation::from_signed_order_data` +
   `serde_json::to_vec`).

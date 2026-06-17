@@ -9,30 +9,30 @@
 //!
 //! ## What lives here
 //!
-//! - [`prelude`] — `use shepherd_sdk::prelude::*` imports alloy
+//! - [`prelude`] - `use shepherd_sdk::prelude::*` imports alloy
 //!   primitives ([`Address`], [`B256`], [`Bytes`], [`U256`],
 //!   [`keccak256`]) and cowprotocol's order / signing / orderbook
 //!   surface ([`OrderCreation`], [`OrderData`], [`OrderUid`],
 //!   [`OrderKind`], [`Signature`], [`Chain`], [`GPv2OrderData`],
 //!   [`EMPTY_APP_DATA_JSON`], [`ApiError`], [`OrderPostErrorKind`]).
 //!
-//! - [`cow`] — `GPv2OrderData` -> `OrderData` bridging
+//! - [`cow`] - `GPv2OrderData` -> `OrderData` bridging
 //!   ([`gpv2_to_order_data`]), `IConditionalOrder` revert decoding
 //!   ([`PollOutcome`] + [`decode_revert`]), and the
 //!   [`RetryAction`] classifier driving submit-failure dispatch.
 //!
-//! - [`chain`] — `eth_call` JSON plumbing
+//! - [`chain`] - `eth_call` JSON plumbing
 //!   ([`eth_call_params`], [`parse_eth_call_result`],
 //!   [`decode_revert_hex`]).
 //!
-//! - [`host`] — host trait seam ([`Host`] / [`ChainHost`] /
+//! - [`host`] - host trait seam ([`Host`] / [`ChainHost`] /
 //!   [`LocalStoreHost`] / [`CowApiHost`] / [`LoggingHost`]) plus a
 //!   host-neutral [`HostError`]. Modules that want host-free tests
 //!   structure their strategy logic against these traits and slot
 //!   in the `shepherd-sdk-test` mocks. See the host module docs for
 //!   the wit-bindgen adapter pattern.
 //!
-//! - `store` — placeholder for `WatchSet` / `BackoffLedger`
+//! - `store` - placeholder for `WatchSet` / `BackoffLedger`
 //!   per ADR-0006. Populated when a second strategy module needs
 //!   the same key conventions.
 //!
@@ -44,7 +44,7 @@
 //! Helpers in this SDK therefore take primitive types (`&[u8]`,
 //! `Option<&str>`, slices) rather than the per-module `HostError`
 //! struct; modules unpack their `HostError` on the way in. Trade-off
-//! documented in ADR-0006 / ADR-0007 — the SDK stays on the guest
+//! documented in ADR-0006 / ADR-0007 - the SDK stays on the guest
 //! side, neutral to which world the module exports.
 //!
 //! [`Address`]: alloy_primitives::Address
@@ -76,6 +76,7 @@
 //! [`LoggingHost`]: host::LoggingHost
 //! [`HostError`]: host::HostError
 
+#![cfg_attr(not(test), warn(unused_crate_dependencies))]
 #![warn(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
@@ -88,7 +89,7 @@ pub mod prelude;
 #[cfg(test)]
 mod tests {
     //! The skeleton has no behaviour to exercise; this test just
-    //! locks the prelude's surface — the build itself proves the
+    //! locks the prelude's surface - the build itself proves the
     //! re-exports compile against both `wasm32-wasip2` and the
     //! host target.
 
