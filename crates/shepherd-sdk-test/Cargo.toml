@@ -7,7 +7,7 @@ repository.workspace = true
 description = "In-memory host mocks for Shepherd module unit tests. Implements shepherd_sdk::host::{ChainHost, LocalStoreHost, CowApiHost, LoggingHost}."
 
 [lib]
-# Plain library, host-only — module Cargo.toml lists this under
+# Plain library, host-only - module Cargo.toml lists this under
 # [dev-dependencies] so it never ships in the wasm bundle.
 
 [dependencies]

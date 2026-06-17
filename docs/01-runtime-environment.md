@@ -26,13 +26,13 @@
 
 The Component Model is **production-viable in wasmtime 45** and gives us critical advantages over raw core modules:
 
-1. **Structural sandboxing.** A component compiled against a WIT world with no filesystem import literally *cannot* access the filesystem — enforced at the type level, not just by omission of host functions. This is stronger than core module sandboxing where imports are stringly-typed.
+1. **Structural sandboxing.** A component compiled against a WIT world with no filesystem import literally *cannot* access the filesystem - enforced at the type level, not just by omission of host functions. This is stronger than core module sandboxing where imports are stringly-typed.
 
 2. **Type-safe API contract.** The WIT definition *is* the API spec. Both host and guest get generated bindings (`wasmtime::component::bindgen!` on the host, `wit_bindgen::generate!` on the guest). No manual ABI wrangling, no serialisation disagreements.
 
 3. **Resource types.** Opaque handles with lifecycle management (constructors, methods, destructors via `ResourceTable`). Ideal for subscription handles, RPC connections, etc.
 
-4. **Multi-language guests from day 1.** Module authors can use Rust, C/C++, Go, JavaScript (ComponentizeJS), or Python (componentize-py) — all producing valid components against the same WIT world. This dramatically lowers the barrier for community modules.
+4. **Multi-language guests from day 1.** Module authors can use Rust, C/C++, Go, JavaScript (ComponentizeJS), or Python (componentize-py) - all producing valid components against the same WIT world. This dramatically lowers the barrier for community modules.
 
 5. **No WASI required.** The Component Model and WASI are architecturally separate. We define a pure `nexum:host` world with exactly our host APIs. Zero WASI imports means zero implicit capabilities.
 
@@ -47,9 +47,9 @@ The Component Model is **production-viable in wasmtime 45** and gives us critica
 
 | Aspect | Risk |
 |--------|------|
-| `bindgen!` macro, custom worlds, resource types | Low — stable, well-documented |
-| `wit-bindgen` guest bindings | Medium — API churn between versions |
-| Component Model native async (streams/futures) | High — not needed yet, avoid for now |
+| `bindgen!` macro, custom worlds, resource types | Low - stable, well-documented |
+| `wit-bindgen` guest bindings | Medium - API churn between versions |
+| Component Model native async (streams/futures) | High - not needed yet, avoid for now |
 
 ## Core Concepts
 
@@ -210,7 +210,7 @@ interface chain {
     }
 
     /// Additive 0.2 method: batched JSON-RPC. The alloy-backed HostTransport
-    /// routes RequestPacket::Batch through this — `provider.multicall(...)`
+    /// routes RequestPacket::Batch through this - `provider.multicall(...)`
     /// actually batches on the wire in 0.2. Hosts that cannot batch natively
     /// MUST fall back to sequential `request` calls; the returned list is
     /// the same length as `requests` and in the same order.
@@ -227,7 +227,7 @@ interface identity {
     /// Sign a message with `personal_sign` semantics. The host MUST prepend
     /// the EIP-191 prefix (`\x19Ethereum Signed Message:\n<len>`) before
     /// hashing and signing. Hosts MUST NOT expose a raw-bytes signing path
-    /// through this function — a raw signer can be tricked into signing
+    /// through this function - a raw signer can be tricked into signing
     /// EIP-155 transactions or EIP-712 payloads disguised as plain bytes.
     ///
     /// Returns a 65-byte ECDSA secp256k1 signature (r || s || v).
@@ -257,7 +257,7 @@ interface logging {
 /// The universal event-driven module world. Platform-agnostic: no CoW,
 /// no domain-specific imports. Suitable for any web3 automation.
 ///
-/// In 0.2 this imports all six primitives — the identity import was
+/// In 0.2 this imports all six primitives - the identity import was
 /// missing from the 0.1 WIT despite being part of the documented primitive
 /// taxonomy, and is now present.
 world event-module {
@@ -276,7 +276,7 @@ world event-module {
 }
 ```
 
-In addition to the six core imports, 0.2 publishes three additive optional capabilities — `clock` (`now-ms` / `monotonic-ns`), `random` (CSPRNG `fill`), and `http` (allowlisted outbound HTTP) — which modules can declare in their `nexum.toml` `[capabilities]` section. The migration guide carries the full WIT for each. 0.2 also publishes the experimental **`query-module`** world for request/response modules; the WIT is stable but no host implementation ships in 0.2, so it's a target for `MockHost` testing only.
+In addition to the six core imports, 0.2 publishes three additive optional capabilities - `clock` (`now-ms` / `monotonic-ns`), `random` (CSPRNG `fill`), and `http` (allowlisted outbound HTTP) - which modules can declare in their `nexum.toml` `[capabilities]` section. The migration guide carries the full WIT for each. 0.2 also publishes the experimental **`query-module`** world for request/response modules; the WIT is stable but no host implementation ships in 0.2, so it's a target for `MockHost` testing only.
 
 ### CoW-Specific Package: `shepherd:cow@0.2.0`
 
@@ -318,14 +318,14 @@ world shepherd {
 
 ### Key properties
 
-- **No WASI** — by default, modules cannot access FS, network, clocks, or random. The additive 0.2 capabilities (`clock`, `random`, `http`) provide controlled access to time, entropy, and allowlisted HTTP — but only when declared in the manifest's `[capabilities]` section.
-- **All I/O through our interfaces** — RPC reads, identity/signing, CoW API, local-store, order submission, logging.
-- **Generic JSON-RPC passthrough** — the `chain` interface exposes a single `request` function (plus an additive `request-batch`). The SDK implements alloy's `Transport` trait on top of it, giving modules the full alloy `Provider` API. See doc 07 for details.
-- **Identity as a first-class primitive** — the `identity` interface provides key management and signing. The `chain` host implementation depends on `identity` internally: signing RPC methods (`eth_sendTransaction`, `eth_accounts`, `eth_signTypedData_v4`, `personal_sign`) are intercepted and delegated to the identity backend. Modules can also import `identity` directly for `personal_sign`-style message signing, EIP-712 typed data signing, and listing accounts. (Raw-bytes signing, gated by an explicit capability, is on the 0.3 roadmap; the current `sign` MUST prepend the EIP-191 prefix.)
-- **Unified `host-error` taxonomy** — every host function returns `result<T, host-error>`. The 0.1 per-protocol error types (`json-rpc-error`, `identity-error`, `msg-error`, `store-error`, `api-error`) are gone. Modules match on `host-error-kind` (`unsupported`, `unavailable`, `denied`, `rate-limited`, `timeout`, `invalid-input`, `internal`) for retry/backoff decisions.
-- **`list<u8>` for raw bytes** — local-store values, order payloads, signatures, accounts, etc. The SDK provides typed wrappers.
+- **No WASI** - by default, modules cannot access FS, network, clocks, or random. The additive 0.2 capabilities (`clock`, `random`, `http`) provide controlled access to time, entropy, and allowlisted HTTP - but only when declared in the manifest's `[capabilities]` section.
+- **All I/O through our interfaces** - RPC reads, identity/signing, CoW API, local-store, order submission, logging.
+- **Generic JSON-RPC passthrough** - the `chain` interface exposes a single `request` function (plus an additive `request-batch`). The SDK implements alloy's `Transport` trait on top of it, giving modules the full alloy `Provider` API. See doc 07 for details.
+- **Identity as a first-class primitive** - the `identity` interface provides key management and signing. The `chain` host implementation depends on `identity` internally: signing RPC methods (`eth_sendTransaction`, `eth_accounts`, `eth_signTypedData_v4`, `personal_sign`) are intercepted and delegated to the identity backend. Modules can also import `identity` directly for `personal_sign`-style message signing, EIP-712 typed data signing, and listing accounts. (Raw-bytes signing, gated by an explicit capability, is on the 0.3 roadmap; the current `sign` MUST prepend the EIP-191 prefix.)
+- **Unified `host-error` taxonomy** - every host function returns `result<T, host-error>`. The 0.1 per-protocol error types (`json-rpc-error`, `identity-error`, `msg-error`, `store-error`, `api-error`) are gone. Modules match on `host-error-kind` (`unsupported`, `unavailable`, `denied`, `rate-limited`, `timeout`, `invalid-input`, `internal`) for retry/backoff decisions.
+- **`list<u8>` for raw bytes** - local-store values, order payloads, signatures, accounts, etc. The SDK provides typed wrappers.
 - **Resource types** can be added later (e.g. subscription handles, cursor-based log iteration).
-- **Two worlds in 0.2's reference runtime** — `nexum:host/event-module` for platform-agnostic modules; `shepherd:cow/shepherd` for CoW Protocol modules that need the `cow-api` import. The experimental `nexum:host/query-module` world is published but not yet hosted.
+- **Two worlds in 0.2's reference runtime** - `nexum:host/event-module` for platform-agnostic modules; `shepherd:cow/shepherd` for CoW Protocol modules that need the `cow-api` import. The experimental `nexum:host/query-module` world is published but not yet hosted.
 
 ## Host-Side Embedding
 
@@ -409,7 +409,7 @@ impl nexum::host::chain::Host for NexumHostState {
         let provider = self.provider_for(chain_id)?;
         let raw_params: Box<RawValue> = RawValue::from_string(params)?;
 
-        // One function handles the entire eth_ namespace — alloy's provider
+        // One function handles the entire eth_ namespace - alloy's provider
         // stack (timeout, retry, rate-limit, fallback) applies transparently.
         match provider.raw_request_dyn(method.into(), &raw_params).await {
             Ok(result) => Ok(Ok(result.get().to_string())),
@@ -492,7 +492,7 @@ See doc 07 for the full `chain` and `cow-api` host implementations, method allow
 
 ### Universal modules (`nexum-sdk`)
 
-Module authors targeting the universal `event-module` world add the `nexum-sdk` crate and use the `#[nexum::module]` proc macro. Modules can access identity for signing operations — either indirectly through `chain` (signing RPC methods are handled transparently) or directly via the `identity` interface for raw signing:
+Module authors targeting the universal `event-module` world add the `nexum-sdk` crate and use the `#[nexum::module]` proc macro. Modules can access identity for signing operations - either indirectly through `chain` (signing RPC methods are handled transparently) or directly via the `identity` interface for raw signing:
 
 ```rust
 use nexum_sdk::prelude::*;
@@ -518,7 +518,7 @@ impl BlockLogger {
 
 ### CoW Protocol modules (`shepherd-sdk`)
 
-Module authors targeting the CoW-specific `shepherd` world add the `shepherd-sdk` crate and use the `#[shepherd::module]` proc macro. The macro provides **named event handlers** (`on_block`, `on_logs`, `on_tick`, `on_message`) — it generates the `on_event` match dispatch, WIT export wrapper, and optional provider injection. Handlers can be `async fn` for natural `.await`:
+Module authors targeting the CoW-specific `shepherd` world add the `shepherd-sdk` crate and use the `#[shepherd::module]` proc macro. The macro provides **named event handlers** (`on_block`, `on_logs`, `on_tick`, `on_message`) - it generates the `on_event` match dispatch, WIT export wrapper, and optional provider injection. Handlers can be `async fn` for natural `.await`:
 
 ```rust
 use shepherd_sdk::prelude::*;
@@ -538,11 +538,11 @@ impl TwapMonitor {
         Ok(())
     }
 
-    // Named handler — macro generates on_event match dispatch.
+    // Named handler - macro generates on_event match dispatch.
     // provider is injected from block.chain_id.
-    // async fn — macro wraps in block_on (single-poll, zero overhead).
+    // async fn - macro wraps in block_on (single-poll, zero overhead).
     async fn on_block(block: Block, provider: &RootProvider) -> Result<()> {
-        // Full alloy Provider API — natural .await
+        // Full alloy Provider API - natural .await
         let block_num = provider.get_block_number().await?;
         let balance = provider.get_balance(owner).latest().await?;
 
@@ -590,12 +590,12 @@ All produce valid components against the same WIT worlds (`nexum:host/event-modu
 
 ### Fuel (deterministic cost accounting)
 
-- `Config::consume_fuel(true)` — each WASM op consumes fuel; exhaustion traps.
+- `Config::consume_fuel(true)` - each WASM op consumes fuel; exhaustion traps.
 - Use for **per-invocation budgets**: cap a single `on_event` callback.
 
 ### Epoch Interruption (cooperative time-slicing)
 
-- `Config::epoch_interruption(true)` — background Tokio task calls `engine.increment_epoch()` on a fixed interval.
+- `Config::epoch_interruption(true)` - background Tokio task calls `engine.increment_epoch()` on a fixed interval.
 - Stores yield at epoch boundaries via `epoch_deadline_async_yield_and_update`.
 - Use for **wall-clock fairness**: prevent one module from starving others.
 
@@ -605,9 +605,9 @@ Both are needed: fuel for correctness, epochs for liveness.
 
 Implement `ResourceLimiter` to cap per-module:
 
-- **Memory growth** — target <10 MB default.
-- **Table growth** — max entries.
-- **Instance count** — max concurrent.
+- **Memory growth** - target <10 MB default.
+- **Table growth** - max entries.
+- **Instance count** - max concurrent.
 
 Enforced synchronously on every `memory.grow` / `table.grow`.
 
@@ -628,7 +628,7 @@ All RPC and CoW API I/O is async (alloy / reqwest on the host). wasmtime bridges
 - WASI 0.2.1 is stable in wasmtime. WASI 0.3 (native async) is in preview.
 - The `event-module` world imports **zero WASI interfaces**.
 - This is a security feature: components structurally cannot access FS/network/clocks via WASI.
-- The 0.2 additive capabilities (`clock`, `random`, `http`) cover the common needs that would otherwise drive a WASI import, but as first-class Nexum interfaces — capability-negotiated via the manifest, allowlisted (in the HTTP case), and consistent with the rest of the host surface (`host-error` returns, no panics on capability absence).
+- The 0.2 additive capabilities (`clock`, `random`, `http`) cover the common needs that would otherwise drive a WASI import, but as first-class Nexum interfaces - capability-negotiated via the manifest, allowlisted (in the HTTP case), and consistent with the rest of the host surface (`host-error` returns, no panics on capability absence).
 
 ## Summary: Nexum <-> wasmtime Mapping
 

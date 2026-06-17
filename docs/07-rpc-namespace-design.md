@@ -32,19 +32,19 @@ This creates several problems:
 
 1. **Boilerplate multiplication.** Every new `eth_` method requires changes in three places: WIT definition, host trait implementation, and SDK wrapper. The Ethereum JSON-RPC namespace has 30+ methods; most modules will need more than the three currently exposed.
 
-2. **Alloy incompatibility.** Module authors using Rust cannot use alloy's `Provider` API — which provides 80+ typed convenience methods — because the transport layer is locked behind per-method WIT functions. They're forced to manually ABI-encode calldata, call `blockchain::eth_call`, and ABI-decode the result for every interaction.
+2. **Alloy incompatibility.** Module authors using Rust cannot use alloy's `Provider` API - which provides 80+ typed convenience methods - because the transport layer is locked behind per-method WIT functions. They're forced to manually ABI-encode calldata, call `blockchain::eth_call`, and ABI-decode the result for every interaction.
 
 3. **Namespace rigidity.** Adding a `cow_` namespace for CoW Protocol API calls would duplicate the same per-method pattern. Future namespaces (debug_, trace_, etc.) compound this further.
 
-The goal: **one WIT function to rule the entire `eth_` namespace**, with a guest-side SDK that gives module authors the full alloy `Provider` API — no manual ABI wrangling, no WIT changes when new methods are needed.
+The goal: **one WIT function to rule the entire `eth_` namespace**, with a guest-side SDK that gives module authors the full alloy `Provider` API - no manual ABI wrangling, no WIT changes when new methods are needed.
 
 ## Design: Generic JSON-RPC Passthrough
 
 ### Core Insight
 
-alloy's `Transport` trait is a Tower `Service<RequestPacket, Response = ResponsePacket>`. If we expose a single JSON-RPC dispatch function in WIT, the SDK can implement `Transport` on top of it. This gives guest modules the entire alloy `Provider` API for free — every current and future `eth_` method works automatically.
+alloy's `Transport` trait is a Tower `Service<RequestPacket, Response = ResponsePacket>`. If we expose a single JSON-RPC dispatch function in WIT, the SDK can implement `Transport` on top of it. This gives guest modules the entire alloy `Provider` API for free - every current and future `eth_` method works automatically.
 
-From the guest's perspective, host function calls are synchronous (they block until the host returns). The returned future resolves in a single poll. This means alloy's async `Provider` methods work with a trivial executor — no real async machinery needed.
+From the guest's perspective, host function calls are synchronous (they block until the host returns). The returned future resolves in a single poll. This means alloy's async `Provider` methods work with a trivial executor - no real async machinery needed.
 
 ### Architecture
 
@@ -99,11 +99,11 @@ interface chain {
 }
 ```
 
-Errors are reported via the unified `host-error` (see doc 00 and the [migration guide §2](migration/0.1-to-0.2.md#2-error-model-unification-both)) — the 0.1 `json-rpc-error` shape is gone. Modules match on `host-error-kind` (`unavailable`, `rate-limited`, `timeout`, `denied`, `invalid-input`, ...) for retry/backoff decisions rather than parsing numeric JSON-RPC codes.
+Errors are reported via the unified `host-error` (see doc 00 and the [migration guide §2](migration/0.1-to-0.2.md#2-error-model-unification-both)) - the 0.1 `json-rpc-error` shape is gone. Modules match on `host-error-kind` (`unavailable`, `rate-limited`, `timeout`, `denied`, `invalid-input`, ...) for retry/backoff decisions rather than parsing numeric JSON-RPC codes.
 
 The `types` interface is unchanged in shape (it now exposes `host-error` / `host-error-kind`). The `local-store`, `remote-store`, `messaging`, and `logging` interfaces are unchanged.
 
-The `identity` interface provides cryptographic identity — key management and signing:
+The `identity` interface provides cryptographic identity - key management and signing:
 
 ```wit
 interface identity {
@@ -121,7 +121,7 @@ interface identity {
 }
 ```
 
-The universal `event-module` world (in `nexum:host`) contains the platform-agnostic interfaces — six imports in 0.2:
+The universal `event-module` world (in `nexum:host`) contains the platform-agnostic interfaces - six imports in 0.2:
 
 ```wit
 world event-module {
@@ -153,21 +153,21 @@ world shepherd {
 | `blockchain::eth-call(chain-id, to, data)` | `chain::request(chain-id, "eth_call", params_json)` |
 | `blockchain::eth-get-logs(filter)` | `chain::request(chain-id, "eth_getLogs", params_json)` |
 | `blockchain::eth-block-number(chain-id)` | `chain::request(chain-id, "eth_blockNumber", "[]")` |
-| *n/a — not exposed* | `chain::request(chain-id, "eth_getBalance", params_json)` |
-| *n/a — not exposed* | `chain::request(chain-id, "eth_getCode", params_json)` |
-| *n/a — not exposed* | `chain::request(chain-id, "eth_getStorageAt", params_json)` |
-| *n/a — not exposed* | Any `eth_*` method — no WIT change needed |
+| *n/a - not exposed* | `chain::request(chain-id, "eth_getBalance", params_json)` |
+| *n/a - not exposed* | `chain::request(chain-id, "eth_getCode", params_json)` |
+| *n/a - not exposed* | `chain::request(chain-id, "eth_getStorageAt", params_json)` |
+| *n/a - not exposed* | Any `eth_*` method - no WIT change needed |
 
 ### Why JSON Strings (Not `list<u8>`)
 
-- The Ethereum JSON-RPC spec is JSON. alloy serialises params to JSON internally. Using `string` means zero intermediate format — the guest produces JSON, the host forwards JSON to alloy's `raw_request_dyn` which accepts `&RawValue` (a JSON string).
+- The Ethereum JSON-RPC spec is JSON. alloy serialises params to JSON internally. Using `string` means zero intermediate format - the guest produces JSON, the host forwards JSON to alloy's `raw_request_dyn` which accepts `&RawValue` (a JSON string).
 - Debuggability: JSON is human-readable in logs and traces.
 - The canonical ABI cost of copying a JSON string across the component boundary is negligible relative to the network RTT of an actual RPC call.
 - Binary encoding (CBOR, postcard) would require custom (de)serialisation on both sides, defeating the purpose of minimising boilerplate.
 
 ## Host Implementation
 
-The host implementation is minimal — one function handles the entire `eth_` namespace:
+The host implementation is minimal - one function handles the entire `eth_` namespace:
 
 ```rust
 use serde_json::value::RawValue;
@@ -270,7 +270,7 @@ This could be made configurable per-module via `nexum.toml`:
 ```toml
 [module.chain]
 # Additional methods beyond the default read-only set.
-# Use with caution — write methods can have side-effects.
+# Use with caution - write methods can have side-effects.
 extra_allowed_methods = ["eth_createAccessList"]
 ```
 
@@ -545,7 +545,7 @@ use tower::Service;
 use std::task::{Context, Poll};
 
 /// An alloy-compatible transport that routes JSON-RPC requests through the
-/// Nexum host engine. Synchronous from the guest's perspective — the host
+/// Nexum host engine. Synchronous from the guest's perspective - the host
 /// function blocks until the RPC response is available.
 #[derive(Debug, Clone)]
 pub struct HostTransport {
@@ -564,7 +564,7 @@ impl Service<RequestPacket> for HostTransport {
     type Future = TransportFut<'static>;
 
     fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        // Always ready — host function calls are synchronous from the guest.
+        // Always ready - host function calls are synchronous from the guest.
         Poll::Ready(Ok(()))
     }
 
@@ -613,7 +613,7 @@ fn dispatch_single(
     let params_json = req.params().map(|p| p.get()).unwrap_or("[]");
 
     // This calls the WIT-imported host function. Synchronous from the guest's
-    // perspective — the host executes the RPC call asynchronously and returns
+    // perspective - the host executes the RPC call asynchronously and returns
     // the result when ready.
     match chain::request(chain_id, method, params_json) {
         Ok(result_json) => {
@@ -645,13 +645,13 @@ fn dispatch_single(
 
 ### Why This Works Without Real Async
 
-The `call()` method returns a `Box::pin(async move { ... })` — but the body is entirely synchronous. The `chain::request` host function blocks from the guest's perspective (the host runs the actual RPC call asynchronously via wasmtime's `func_wrap_async`, but the guest sees a normal function call that returns a value). The future resolves in a single poll.
+The `call()` method returns a `Box::pin(async move { ... })` - but the body is entirely synchronous. The `chain::request` host function blocks from the guest's perspective (the host runs the actual RPC call asynchronously via wasmtime's `func_wrap_async`, but the guest sees a normal function call that returns a value). The future resolves in a single poll.
 
-This means alloy's `Provider` methods — which `await` the transport internally — complete immediately when driven by any executor. The SDK provides a minimal single-threaded executor:
+This means alloy's `Provider` methods - which `await` the transport internally - complete immediately when driven by any executor. The SDK provides a minimal single-threaded executor:
 
 ```rust
 /// Drive a future to completion. Since the HostTransport resolves
-/// synchronously, this is a single-poll operation — no actual async
+/// synchronously, this is a single-poll operation - no actual async
 /// scheduling occurs.
 pub fn block_on<F: Future>(future: F) -> F::Output {
     futures_executor::block_on(future)
@@ -668,8 +668,8 @@ use alloy_rpc_client::RpcClient;
 
 /// Create an alloy `Provider` backed by the Nexum host engine.
 ///
-/// The returned provider supports the full alloy `Provider` API — all `eth_*`
-/// methods, builder patterns, typed responses — routing every request through
+/// The returned provider supports the full alloy `Provider` API - all `eth_*`
+/// methods, builder patterns, typed responses - routing every request through
 /// the host's RPC stack (timeout, retry, rate-limit, failover).
 ///
 /// ```rust
@@ -694,15 +694,15 @@ let block_num = block_on(provider.get_block_number())?;  // noisy
 let balance = block_on(provider.get_balance(addr).latest())?;  // everywhere
 ```
 
-This is verbose and obscures the actual logic. But we can't reimplement every `Provider` method as a synchronous wrapper — that defeats the purpose of the generic passthrough.
+This is verbose and obscures the actual logic. But we can't reimplement every `Provider` method as a synchronous wrapper - that defeats the purpose of the generic passthrough.
 
 ### The Solution: Named Event Handlers + `async fn`
 
 The proc macro (see doc 05) already generates the WIT export boilerplate. We extend it in two ways. For universal modules, the `#[nexum::module]` macro is used; for CoW modules, the `#[shepherd::module]` macro (which extends the universal one with CoW-specific imports):
 
-1. **Named event handlers** — instead of writing the `match event { ... }` dispatch manually, module authors implement `on_block`, `on_logs`, `on_tick`, and/or `on_message`. The macro generates the `on_event` match.
-2. **`async fn` support** — handlers can be async. The macro wraps the generated `on_event` in `block_on()`, so `.await` works naturally.
-3. **Provider injection** — if a handler accepts `&RootProvider` as a second parameter, the macro creates the provider from the event's chain_id and passes it in.
+1. **Named event handlers** - instead of writing the `match event { ... }` dispatch manually, module authors implement `on_block`, `on_logs`, `on_tick`, and/or `on_message`. The macro generates the `on_event` match.
+2. **`async fn` support** - handlers can be async. The macro wraps the generated `on_event` in `block_on()`, so `.await` works naturally.
+3. **Provider injection** - if a handler accepts `&RootProvider` as a second parameter, the macro creates the provider from the event's chain_id and passes it in.
 
 **What the module author writes (universal module):**
 
@@ -767,7 +767,7 @@ impl Guest for MyModule {
 }
 ```
 
-The generated code calls `block_on` exactly once — at the top-level export boundary. Inside the async block, all `.await` calls resolve immediately (the `HostTransport` is synchronous under the hood). No real async scheduler runs. No tokio. No waker machinery. It's syntactic sugar that costs nothing at runtime.
+The generated code calls `block_on` exactly once - at the top-level export boundary. Inside the async block, all `.await` calls resolve immediately (the `HostTransport` is synchronous under the hood). No real async scheduler runs. No tokio. No waker machinery. It's syntactic sugar that costs nothing at runtime.
 
 ### Named Handler Conventions
 
@@ -784,11 +784,11 @@ The macro inspects each handler's signature:
 - **Async handlers** -> wrapped in `block_on`; sync handlers called directly
 - **Missing handlers** -> `Ok(())` for that variant (no-op)
 
-**Escape hatch:** defining `on_event` directly takes precedence — the macro uses it as-is (wrapping in `block_on` if async) and ignores named handlers.
+**Escape hatch:** defining `on_event` directly takes precedence - the macro uses it as-is (wrapping in `block_on` if async) and ignores named handlers.
 
 ### Why This Works
 
-1. **WIT exports are synchronous.** The Component Model export signature is `func(event) -> result<_, string>` — no async. The macro bridges this by wrapping the generated dispatch in `block_on`.
+1. **WIT exports are synchronous.** The Component Model export signature is `func(event) -> result<_, string>` - no async. The macro bridges this by wrapping the generated dispatch in `block_on`.
 
 2. **The transport resolves in one poll.** `HostTransport::call()` returns a future whose body is entirely synchronous (it calls the WIT host function, which blocks). When alloy's `Provider` awaits the transport, the future completes immediately.
 
@@ -798,10 +798,10 @@ The macro inspects each handler's signature:
 
    ```rust
    async fn on_block(block: Block, provider: &RootProvider) -> Result<()> {
-       // EthCall builder — .latest() and .await both work
+       // EthCall builder - .latest() and .await both work
        let result = provider.call(tx).latest().await?;
 
-       // Filter builder — standard alloy ergonomics
+       // Filter builder - standard alloy ergonomics
        let logs = provider.get_logs(&filter).await?;
 
        // Raw request for unlisted methods
@@ -851,7 +851,7 @@ impl MyModule {
             // Manual ABI encode
             let calldata = balanceOfCall { owner: addr }.abi_encode();
 
-            // Raw host call — returns opaque bytes
+            // Raw host call - returns opaque bytes
             let result_bytes = blockchain::eth_call(
                 block.chain_id,
                 &token_addr.to_vec(),
@@ -882,9 +882,9 @@ sol! {
 struct MyModule;
 
 impl MyModule {
-    // Named handler — macro generates the match dispatch + provider injection
+    // Named handler - macro generates the match dispatch + provider injection
     async fn on_block(block: Block, provider: &RootProvider) -> Result<()> {
-        // Full alloy Provider API — natural .await, provider injected
+        // Full alloy Provider API - natural .await, provider injected
         let block_num = provider.get_block_number().await?;
         let eth_balance = provider.get_balance(addr).latest().await?;
         let code = provider.get_code_at(contract).latest().await?;
@@ -923,7 +923,7 @@ Every alloy `Provider` method works. No WIT changes. No host-side per-method cod
 
 CoW Protocol's API is REST-based, not JSON-RPC. Two options:
 
-### Option A: Separate REST Interface (Recommended — chosen for 0.2)
+### Option A: Separate REST Interface (Recommended - chosen for 0.2)
 
 In 0.1 this was two interfaces, `cow` (REST passthrough) and `order` (typed `submit`). 0.2 merges them into a single `cow-api` interface, dropping the `cow::cow::request` triple-stutter:
 
@@ -1042,7 +1042,7 @@ async fn request(&mut self, chain_id: u64, method: String, params: String)
 }
 ```
 
-**Option A is recommended and is what 0.2 ships.** The CoW API is REST, not JSON-RPC — forcing it into JSON-RPC semantics adds a translation layer on both sides. A separate `cow-api` interface keeps the contract explicit and makes it clear in the WIT world what capabilities a module has. It also allows independent evolution — the `chain` interface doesn't need to know about CoW, and vice versa.
+**Option A is recommended and is what 0.2 ships.** The CoW API is REST, not JSON-RPC - forcing it into JSON-RPC semantics adds a translation layer on both sides. A separate `cow-api` interface keeps the contract explicit and makes it clear in the WIT world what capabilities a module has. It also allows independent evolution - the `chain` interface doesn't need to know about CoW, and vice versa.
 
 ### SDK: `Cow`
 
@@ -1096,7 +1096,7 @@ Usage in a module:
 async fn on_block(block: Block, provider: &RootProvider) -> Result<()> {
     let cow = Cow::new(block.chain_id);
 
-    // Read chain state via alloy — provider injected by macro
+    // Read chain state via alloy - provider injected by macro
     let block_num = provider.get_block_number().await?;
 
     // Submit order via CoW API
@@ -1105,7 +1105,7 @@ async fn on_block(block: Block, provider: &RootProvider) -> Result<()> {
         buy_token: weth,
         sell_amount: U256::from(1_000_000_000),
         kind: OrderKind::Sell,
-        // block.timestamp is ms-since-epoch in 0.2 — divide for seconds
+        // block.timestamp is ms-since-epoch in 0.2 - divide for seconds
         valid_to: (provider.get_block(block_num.into(), false).await?
             .unwrap().header.timestamp / 1000) + 300,
         ..Default::default()
@@ -1206,8 +1206,8 @@ use nexum_sdk::testing::MockProvider;
 
 #[test]
 fn test_reads_balance() {
-    // block_on is still useful in tests — tests are sync by default.
-    // (Or use #[tokio::test] — MockProvider works with any executor.)
+    // block_on is still useful in tests - tests are sync by default.
+    // (Or use #[tokio::test] - MockProvider works with any executor.)
     let mut mock = MockProvider::new(42161);
 
     // Queue mock responses (FIFO)
@@ -1251,7 +1251,7 @@ fn test_submits_order() {
 | **WIT changes for new methods** | None | New function + types per method |
 | **Host implementation** | ~20 lines total | Per-method impl + dispatch |
 | **Guest API** | Full alloy Provider (80+ methods) | Only what WIT exposes |
-| **alloy compatibility** | Native — IS an alloy transport | Manual ABI encode/decode |
+| **alloy compatibility** | Native - IS an alloy transport | Manual ABI encode/decode |
 | **Type safety at WIT boundary** | Runtime (JSON strings) | Compile-time (WIT types) |
 | **Method allowlisting** | Runtime string match | Implicit (only exposed methods exist) |
 | **Debugging** | JSON in/out visible in traces | Structured WIT types in traces |
@@ -1259,7 +1259,7 @@ fn test_submits_order() {
 
 The primary trade-off is **type safety at the WIT boundary**: JSON strings vs. structured WIT types. This is mitigated by:
 
-1. **Rust guests** use alloy's type system — serialisation errors surface as alloy `TransportError` with clear messages.
+1. **Rust guests** use alloy's type system - serialisation errors surface as alloy `TransportError` with clear messages.
 2. **Non-Rust guests** (JS, Python, Go) typically work with JSON natively, so JSON strings are actually *more* natural than WIT record types.
 3. **Tracing**: the host can log method + params as structured JSON before forwarding, providing equal or better debuggability.
 
@@ -1274,8 +1274,8 @@ For modules and embedders moving from 0.1 to 0.2, follow the [Migration Guide](m
 | Component | What 0.2 ships |
 |---|---|
 | **WIT** | `chain` interface with `request` + additive `request-batch`. `identity` (accounts, sign, sign-typed-data). Merged `cow-api` in `shepherd:cow`. `event-module` imports 6 interfaces: chain, identity, local-store, remote-store, messaging, logging. Plus additive `clock` / `random` / `http` capabilities and the experimental `query-module` world. |
-| **Host** | `ChainHost<I: Identity>` — one `chain::request` impl that forwards read-only methods to `provider.raw_request_dyn` and delegates signing methods (`eth_sendTransaction`, `eth_accounts`, `eth_signTypedData_v4`, `personal_sign`) to the `Identity` backend. Plus `chain::request-batch` that actually pipelines. One `identity::Host` impl delegating to the same backend. One `cow-api::request` + `submit-order` impl forwarding to HTTP client. All host functions return `host-error`. |
+| **Host** | `ChainHost<I: Identity>` - one `chain::request` impl that forwards read-only methods to `provider.raw_request_dyn` and delegates signing methods (`eth_sendTransaction`, `eth_accounts`, `eth_signTypedData_v4`, `personal_sign`) to the `Identity` backend. Plus `chain::request-batch` that actually pipelines. One `identity::Host` impl delegating to the same backend. One `cow-api::request` + `submit-order` impl forwarding to HTTP client. All host functions return `host-error`. |
 | **SDK** | `nexum-sdk`: `HostTransport` (alloy `Transport` impl, batches via `chain::request-batch`), `provider()` constructor, `Signer` (typed identity wrapper), `HostError` / `HostErrorKind`. `shepherd-sdk`: `Cow` (extends `nexum-sdk`). `block_on` is internal. |
 | **`#[nexum::module]` / `#[shepherd::module]` macros** | Named event handlers (`on_block`, `on_logs`, `on_tick`, `on_message`) with generated match dispatch. `async fn` support. Optional `&RootProvider` injection. `#[nexum::module]` for universal modules; `#[shepherd::module]` for CoW modules. |
 | **Module author experience** | Full alloy `Provider` API via injected provider. Signing via `Signer` or transparently through `chain::request` signing methods. Full CoW API via `Cow`. No match boilerplate. No `block_on`. No manual ABI wrangling for RPC calls. Match on `HostErrorKind` for retry/backoff. |
-| **Existing ABI helpers** | Unchanged — `sol!` macro and `alloy-sol-types` still used for contract calldata encoding/decoding. |
+| **Existing ABI helpers** | Unchanged - `sol!` macro and `alloy-sol-types` still used for contract calldata encoding/decoding. |

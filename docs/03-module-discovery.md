@@ -1,6 +1,6 @@
 # Module Discovery
 
-Doc 02 defines how modules are packaged (bundle = `nexum.toml` + `module.wasm`) and how content is fetched by hash (pluggable content store). This document defines how the runtime **discovers which modules to load** — the layer above content resolution.
+Doc 02 defines how modules are packaged (bundle = `nexum.toml` + `module.wasm`) and how content is fetched by hash (pluggable content store). This document defines how the runtime **discovers which modules to load** - the layer above content resolution.
 
 Three discovery sources, from simplest to most decentralised:
 
@@ -54,7 +54,7 @@ twap-monitor.shepherd.eth
 └── text: shepherd.name     →  "twap-monitor"
 ```
 
-The `contenthash` points to the full bundle on Swarm (a directory containing `nexum.toml` + `module.wasm`). Text records provide lightweight metadata the runtime can read without fetching the bundle — useful for filtering or display.
+The `contenthash` points to the full bundle on Swarm (a directory containing `nexum.toml` + `module.wasm`). Text records provide lightweight metadata the runtime can read without fetching the bundle - useful for filtering or display.
 
 ### Runtime resolution flow
 
@@ -98,11 +98,11 @@ When the module author publishes a new version, they:
 1. Upload the new bundle to Swarm → get new content hash
 2. Update the ENS `contenthash` record
 
-The runtime detects the change on its next poll (or via event — see below), fetches the new bundle, and hot-reloads the module.
+The runtime detects the change on its next poll (or via event - see below), fetches the new bundle, and hot-reloads the module.
 
 ## 3. On-Chain Registry (Contract Events)
 
-For fully autonomous discovery — the runtime watches a contract for registration events and auto-loads modules without operator intervention.
+For fully autonomous discovery - the runtime watches a contract for registration events and auto-loads modules without operator intervention.
 
 ### Option A: Dedicated registry contract
 
@@ -130,7 +130,7 @@ interface INexumRegistry {
 
 The runtime subscribes to `ModuleRegistered` events, resolves the ENS name from the event, and enters the ENS resolution flow above.
 
-### Option B: No ad-hoc registry — contracts self-declare via ENS
+### Option B: No ad-hoc registry - contracts self-declare via ENS
 
 This is the more decentralised approach. Instead of a central registry:
 
@@ -169,7 +169,7 @@ ethflow.modules.shepherd.eth  → contenthash of Ethflow bundle
 *.modules.shepherd.eth        → resolved by registry contract
 ```
 
-The wildcard resolver is itself the registry — anyone can register a subdomain. The runtime subscribes to events from the resolver contract to discover new modules.
+The wildcard resolver is itself the registry - anyone can register a subdomain. The runtime subscribes to events from the resolver contract to discover new modules.
 
 This gives us human-readable, permissionless module discovery under a shared namespace.
 
@@ -196,8 +196,8 @@ Discovery is permissionless, but **execution requires operator consent**. The ru
 
 ```toml
 [discovery]
-# "allowlist" — only load modules from these sources
-# "auto" — load anything discovered (use with caution)
+# "allowlist" - only load modules from these sources
+# "auto" - load anything discovered (use with caution)
 mode = "allowlist"
 
 # If mode = "allowlist", only these ENS names / registries are trusted
@@ -222,8 +222,8 @@ In `auto` mode, the runtime loads any module it discovers (useful for a public "
 Suggested naming under a shared parent (e.g. `shepherd.eth` or a subdomain of the protocol):
 
 ```
-<module-name>.shepherd.eth          — community / independent modules
-<module-name>.<protocol>.eth        — protocol-owned modules
+<module-name>.shepherd.eth          - community / independent modules
+<module-name>.<protocol>.eth        - protocol-owned modules
 
 Examples:
   twap-monitor.shepherd.eth
