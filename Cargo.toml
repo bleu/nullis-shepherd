@@ -5,6 +5,7 @@ members = [
     "crates/shepherd-sdk-test",
     "modules/ethflow-watcher",
     "modules/example",
+    "modules/examples/price-alert",
     "modules/twap-monitor",
 ]
 resolver = "2"
