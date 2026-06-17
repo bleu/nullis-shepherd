@@ -53,27 +53,14 @@
 #![warn(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
+pub mod chain;
+pub mod cow;
 pub mod prelude;
-
-/// CoW Protocol bridging: `GPv2OrderData` <-> typed `OrderData`,
-/// `IConditionalOrder` revert decoding, retry classification.
-///
-/// Skeleton — populated by [BLEU-840](
-/// https://linear.app/bleu-builders/issue/BLEU-840).
-pub mod cow {}
-
-/// `eth_call` JSON plumbing: build the `[{to, data}, "latest"]`
-/// params object, parse the `"0x..."` hex result, decode revert
-/// payloads from the host's structured error data.
-///
-/// Skeleton — populated by [BLEU-840](
-/// https://linear.app/bleu-builders/issue/BLEU-840).
-pub mod chain {}
 
 /// `local-store` helpers: `WatchSet`, `BackoffLedger` per ADR-0006.
 ///
-/// Skeleton — populated by [BLEU-840](
-/// https://linear.app/bleu-builders/issue/BLEU-840).
+/// Skeleton — populated by a follow-up to BLEU-840 once a second
+/// strategy module needs the same key conventions.
 pub mod store {}
 
 #[cfg(test)]
