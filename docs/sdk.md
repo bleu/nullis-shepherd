@@ -14,7 +14,7 @@ RUSTDOCFLAGS="-D warnings -D missing-docs" cargo doc -p shepherd-sdk --no-deps -
 
 ## Supported host capabilities
 
-`shepherd-sdk` is host-neutral — it does not call wit-bindgen-
+`shepherd-sdk` is host-neutral - it does not call wit-bindgen-
 generated functions directly. Instead, it exposes traits that mirror
 the on-the-wire host interfaces, and modules adapt their wit-bindgen
 imports to the traits at the cdylib boundary. The traits in
@@ -36,34 +36,34 @@ seam one-for-one.
 
 ## Modules
 
-- [`prelude`](../target/doc/shepherd_sdk/prelude/index.html) — bulk
+- [`prelude`](../target/doc/shepherd_sdk/prelude/index.html) - bulk
   re-exports. `use shepherd_sdk::prelude::*;` and every module path
   resolves: alloy primitives (`Address`, `B256`, `Bytes`, `U256`,
   `keccak256`) plus cowprotocol order / signing / orderbook surface.
 
-- [`cow`](../target/doc/shepherd_sdk/cow/index.html) — CoW Protocol
+- [`cow`](../target/doc/shepherd_sdk/cow/index.html) - CoW Protocol
   bridging:
-  - `cow::order::gpv2_to_order_data` — convert the on-chain
+  - `cow::order::gpv2_to_order_data` - convert the on-chain
     `GPv2OrderData` (12-field Solidity tuple with bytes32 markers)
     into the typed `OrderData` shape the orderbook signs against.
   - `cow::composable::PollOutcome` + `cow::composable::decode_revert`
-    — typed dispatch over the five `IConditionalOrder` custom errors
+    - typed dispatch over the five `IConditionalOrder` custom errors
     (`OrderNotValid`, `PollTryNextBlock`, `PollTryAtBlock`,
     `PollTryAtEpoch`, `PollNever`).
-  - `cow::error::RetryAction` + `cow::error::classify_api_error` —
+  - `cow::error::RetryAction` + `cow::error::classify_api_error`  - 
     map `cow_api::submit_order` failures into `TryNextBlock` /
     `Backoff(s)` / `Drop`.
 
-- [`chain`](../target/doc/shepherd_sdk/chain/index.html) — `eth_call`
+- [`chain`](../target/doc/shepherd_sdk/chain/index.html) - `eth_call`
   JSON plumbing:
-  - `chain::eth_call_params(to, data)` — build the `[{to, data},
+  - `chain::eth_call_params(to, data)` - build the `[{to, data},
     "latest"]` params array.
-  - `chain::parse_eth_call_result(json)` — parse the `"0x..."` hex
+  - `chain::parse_eth_call_result(json)` - parse the `"0x..."` hex
     response into bytes.
-  - `chain::decode_revert_hex(s)` — `host-error.data` hex blob ->
+  - `chain::decode_revert_hex(s)` - `host-error.data` hex blob ->
     typed `PollOutcome`.
 
-- [`host`](../target/doc/shepherd_sdk/host/index.html) — host trait
+- [`host`](../target/doc/shepherd_sdk/host/index.html) - host trait
   seam plus the SDK's host-neutral `HostError` (same field shape
   as wit-bindgen's, bridged via one-liner `From` impls per module).
 
