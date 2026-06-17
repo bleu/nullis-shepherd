@@ -1,0 +1,19 @@
+//! CoW Protocol bridging.
+//!
+//! Type conversions and ABI decoding helpers that translate between
+//! the on-chain shape (`GPv2OrderData`, `IConditionalOrder` reverts,
+//! orderbook JSON) and the typed Rust surface (`OrderData`,
+//! `PollOutcome`, `RetryAction`).
+//!
+//! Each submodule stays purely host-neutral: helpers take primitive
+//! arguments (`&[u8]`, `Option<&str>`, slices) so they can be unit-
+//! tested without wit-bindgen scaffolding and re-used unchanged by
+//! TWAP, EthFlow, and future strategy modules.
+
+pub mod composable;
+pub mod error;
+pub mod order;
+
+pub use composable::{IConditionalOrder, PollOutcome, decode_revert};
+pub use error::{RetryAction, classify_api_error, try_decode_api_error};
+pub use order::gpv2_to_order_data;
