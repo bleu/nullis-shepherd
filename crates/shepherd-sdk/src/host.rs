@@ -131,5 +131,47 @@ pub trait LoggingHost {
 /// A blanket impl is provided for any type that implements all four
 /// component traits, so callers do not have to add a redundant
 /// `impl Host for MyHost {}`.
+///
+/// # Example
+///
+/// Strategy functions are generic over [`Host`]. Production code plugs
+/// the per-module `WitBindgenHost` adapter (see `modules/examples/`);
+/// unit tests plug `shepherd_sdk_test::MockHost`.
+///
+/// ```
+/// use shepherd_sdk::host::{
+///     ChainHost, CowApiHost, Host, HostError, LocalStoreHost, LogLevel, LoggingHost,
+/// };
+///
+/// /// Pure strategy logic - no wit-bindgen calls in here.
+/// fn record_block<H: Host>(host: &H, chain_id: u64, key: &str) -> Result<(), HostError> {
+///     host.log(LogLevel::Info, "recording block");
+///     host.set(key, b"")?;
+///     let _block_number = host.request(chain_id, "eth_blockNumber", "[]")?;
+///     Ok(())
+/// }
+///
+/// // Minimal hand-rolled host so the doctest is self-contained.
+/// // Real modules wire `shepherd_sdk_test::MockHost` here.
+/// # struct StubHost;
+/// # impl ChainHost for StubHost {
+/// #     fn request(&self, _: u64, _: &str, _: &str) -> Result<String, HostError> {
+/// #         Ok("\"0x0\"".into())
+/// #     }
+/// # }
+/// # impl LocalStoreHost for StubHost {
+/// #     fn get(&self, _: &str) -> Result<Option<Vec<u8>>, HostError> { Ok(None) }
+/// #     fn set(&self, _: &str, _: &[u8]) -> Result<(), HostError> { Ok(()) }
+/// #     fn delete(&self, _: &str) -> Result<(), HostError> { Ok(()) }
+/// #     fn list_keys(&self, _: &str) -> Result<Vec<String>, HostError> { Ok(vec![]) }
+/// # }
+/// # impl CowApiHost for StubHost {
+/// #     fn submit_order(&self, _: u64, _: &[u8]) -> Result<String, HostError> { Ok("".into()) }
+/// # }
+/// # impl LoggingHost for StubHost {
+/// #     fn log(&self, _: LogLevel, _: &str) {}
+/// # }
+/// record_block(&StubHost, 1, "block:42").unwrap();
+/// ```
 pub trait Host: ChainHost + LocalStoreHost + CowApiHost + LoggingHost {}
 impl<T: ChainHost + LocalStoreHost + CowApiHost + LoggingHost> Host for T {}
