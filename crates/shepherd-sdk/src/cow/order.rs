@@ -24,6 +24,35 @@ use cowprotocol::{BuyTokenDestination, GPv2OrderData, OrderData, OrderKind, Sell
 /// from_signed_order_data` does the same downstream, but doing it here
 /// keeps the EIP-712 hash inputs verbatim if a caller bypasses that
 /// helper later.
+///
+/// # Example
+///
+/// ```
+/// use cowprotocol::{
+///     BuyTokenDestination, GPv2OrderData, OrderKind, SellTokenSource,
+/// };
+/// use shepherd_sdk::cow::gpv2_to_order_data;
+/// use shepherd_sdk::prelude::{Address, U256};
+///
+/// let gpv2 = GPv2OrderData {
+///     sellToken: Address::repeat_byte(1),
+///     buyToken: Address::repeat_byte(2),
+///     receiver: Address::ZERO, // normalised to None
+///     sellAmount: U256::from(1_000u64),
+///     buyAmount: U256::from(999u64),
+///     validTo: u32::MAX,
+///     appData: cowprotocol::EMPTY_APP_DATA_HASH,
+///     feeAmount: U256::ZERO,
+///     kind: OrderKind::SELL,
+///     partiallyFillable: false,
+///     sellTokenBalance: SellTokenSource::ERC20,
+///     buyTokenBalance: BuyTokenDestination::ERC20,
+/// };
+///
+/// let order = gpv2_to_order_data(&gpv2).expect("known markers");
+/// assert_eq!(order.sell_amount, U256::from(1_000u64));
+/// assert_eq!(order.receiver, None);
+/// ```
 pub fn gpv2_to_order_data(gpv2: &GPv2OrderData) -> Option<OrderData> {
     Some(OrderData {
         sell_token: gpv2.sellToken,

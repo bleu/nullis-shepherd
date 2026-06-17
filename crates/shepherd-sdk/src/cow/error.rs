@@ -54,6 +54,31 @@ pub fn try_decode_api_error(host_error_data: Option<&str>) -> Option<ApiError> {
 /// - Recognised non-retriable kinds → `Drop`.
 /// - Payload absent or unparseable → `TryNextBlock` (safe default; a
 ///   flaky orderbook should not be treated as a permanent rejection).
+///
+/// # Example
+///
+/// ```
+/// use shepherd_sdk::cow::{classify_api_error, RetryAction};
+///
+/// // Transient: orderbook rejects with InsufficientFee -> retry next block.
+/// let transient = serde_json::json!({
+///     "errorType": "InsufficientFee",
+///     "description": "fee too low",
+/// })
+/// .to_string();
+/// assert_eq!(classify_api_error(Some(&transient)), RetryAction::TryNextBlock);
+///
+/// // Permanent: InvalidSignature -> drop the watch / placement.
+/// let permanent = serde_json::json!({
+///     "errorType": "InvalidSignature",
+///     "description": "bad sig",
+/// })
+/// .to_string();
+/// assert_eq!(classify_api_error(Some(&permanent)), RetryAction::Drop);
+///
+/// // No payload (e.g. host-error.data is None) -> safe default.
+/// assert_eq!(classify_api_error(None), RetryAction::TryNextBlock);
+/// ```
 pub fn classify_api_error(host_error_data: Option<&str>) -> RetryAction {
     match try_decode_api_error(host_error_data) {
         Some(api) if api.retry_hint() => RetryAction::TryNextBlock,
