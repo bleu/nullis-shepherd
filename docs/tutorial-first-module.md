@@ -4,13 +4,22 @@ This is the cold-start guide for an external developer. Target
 completion time: **under four hours** from "I cloned the repo" to
 "I see my module's first event in the engine log".
 
-The walked-through example is **stop-loss**: a module that watches a
-Chainlink price oracle on every block and submits a pre-signed CoW
-order when the price drops below a configured trigger. The fully
-working source lives at [`modules/examples/stop-loss/`](
-../modules/examples/stop-loss). The rest of this guide reads that
-source top-to-bottom and explains *why* each piece is shaped the
-way it is. Open the files alongside the guide as you read.
+Scenario: a **stop-loss** module that watches a Chainlink price
+oracle on every block and submits a CoW Protocol order when the
+price drops below a configured trigger. It combines every
+load-bearing pattern in the SDK:
+
+| Pattern | Where this tutorial uses it | Already shown in |
+|---|---|---|
+| Block subscription | "react every block" | [`price-alert`](../modules/examples/price-alert) |
+| `chain::request` + ABI decode | read the oracle | [`price-alert`](../modules/examples/price-alert) |
+| `local-store` | dedup submitted orders | [`balance-tracker`](../modules/examples/balance-tracker) |
+| `cow_api::submit_order` | submit the order | [`twap-monitor`](../modules/twap-monitor) |
+| Host-free tests via `MockHost` | unit tests | [`shepherd-sdk-test`](../crates/shepherd-sdk-test) |
+
+If you would rather read working code than a walkthrough, those
+four crates are the worked examples. The rest of this guide
+sequences the build so the patterns are introduced one at a time.
 
 ## 0. Prerequisites (15 minutes)
 
@@ -36,105 +45,234 @@ You should see two log lines from the example module - one in
 the build fails or those log lines do not appear; the rest of the
 tutorial assumes a working local engine.
 
-Now build the stop-loss module:
+## 1. Scaffold the workspace member (15 minutes)
+
+Create a new crate under `modules/examples/`:
 
 ```sh
-cargo build --target wasm32-wasip2 --release -p stop-loss
-ls -lh target/wasm32-wasip2/release/stop_loss.wasm
+mkdir -p modules/examples/stop-loss/src
 ```
 
-Expected size: ~300 KB.
+The `Cargo.toml` follows the same template as `price-alert`:
 
-## 1. Anatomy of a module (10 minutes)
+```toml
+# modules/examples/stop-loss/Cargo.toml
+[package]
+name = "stop-loss"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
-A Shepherd module is a Cargo crate with `crate-type = ["cdylib"]`
-compiled to `wasm32-wasip2`. The minimum layout:
+[lib]
+crate-type = ["cdylib"]
 
+[dependencies]
+shepherd-sdk = { path = "../../../crates/shepherd-sdk" }
+cowprotocol = { version = "1.0.0-alpha.3", default-features = false }
+alloy-primitives = { version = "1.5", default-features = false, features = ["std"] }
+alloy-sol-types = { version = "1.5", default-features = false, features = ["std"] }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
+wit-bindgen = { version = "0.57", default-features = false, features = ["macros", "realloc"] }
+
+[dev-dependencies]
+shepherd-sdk-test = { path = "../../../crates/shepherd-sdk-test" }
 ```
-modules/examples/stop-loss/
-├── Cargo.toml          declares deps (shepherd-sdk, cowprotocol, alloy, ...)
-├── module.toml         declares capabilities + subscriptions + config
-└── src/
-    ├── lib.rs          wit-bindgen glue + Guest impl + adapter
-    └── strategy.rs     pure logic against `shepherd_sdk::host::Host`
-```
 
-The split into `lib.rs` (impure / wit-bindgen) and `strategy.rs`
-(pure / `&impl Host`) is the recipe that lets you test the strategy
-end-to-end against `shepherd-sdk-test::MockHost` without ever
-running the wasm toolchain.
-
-Open [`Cargo.toml`](../modules/examples/stop-loss/Cargo.toml) and
-note the four key features:
+Note the four key features:
 
 - **`crate-type = ["cdylib"]`** - produces a WASM Component when
   built for `wasm32-wasip2`.
-- **`shepherd-sdk` path dep** - the helpers (`cow::`, `chain::`,
-  `host::`, `prelude`) live here.
-- **`shepherd-sdk-test` as a dev-dep** - `MockHost` is only linked
-  under `cargo test`, never in the wasm bundle.
-- **No `nexum-engine` dep** - modules never link the engine; they
-  communicate exclusively through wit-bindgen-generated shims.
+- **`shepherd-sdk` path dep** - brings in the helpers (`cow::`,
+  `chain::`, `host::`, `prelude`).
+- **`shepherd-sdk-test` as a dev-dep** - `MockHost` + assertion
+  helpers, only linked under `cargo test`.
+- **No direct `nexum-engine` dep** - modules never link the engine;
+  they communicate via wit-bindgen-generated shims.
 
-The workspace `Cargo.toml` at the repo root has the crate listed
-under `[workspace] members`.
-
-## 2. The manifest: capabilities and config (10 minutes)
-
-Open [`module.toml`](../modules/examples/stop-loss/module.toml).
-Two things matter:
+Add the new crate to the workspace `members` list in `Cargo.toml`
+at the repo root:
 
 ```toml
-[capabilities]
-required = ["logging", "chain", "local-store", "cow-api"]
+[workspace]
+members = [
+    # ... existing members
+    "modules/examples/stop-loss",
+]
 ```
 
-The engine enforces this list against the WIT imports the
-compiled component declares. Declaring a capability you do not
-use is fine; *missing* one you do use is a hard error at
-instantiation. Stop-loss touches all four:
+`cargo check --target wasm32-wasip2 -p stop-loss` should fail with
+"no library targets found" - expected, you have not written any
+source yet.
 
-| Capability | Used for |
-|---|---|
-| `logging` | every Info / Warn line |
-| `chain` | the `eth_call` to read the oracle |
-| `local-store` | the `submitted:{uid}` and `dropped:{uid}` dedup flags |
-| `cow-api` | submitting the `OrderCreation` body |
+## 2. Author the manifest (10 minutes)
+
+`module.toml` declares the capabilities, subscriptions, and
+operator-supplied config. Drop this next to `Cargo.toml`:
 
 ```toml
+# modules/examples/stop-loss/module.toml
+[module]
+name = "stop-loss"
+version = "0.1.0"
+component = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+[capabilities]
+required = ["logging", "chain", "local-store", "cow-api"]
+optional = []
+
+[capabilities.http]
+allow = []
+
 [[subscription]]
 kind = "block"
 chain_id = 11155111  # Sepolia
-```
 
-Stop-loss reacts to every new block on Sepolia. WebSocket RPC is
-required because `block` rides `eth_subscribe`; see
-[`docs/deployment.md`](./deployment.md) for the operator-side
-chain config.
-
-```toml
 [config]
-oracle_address = "0x694AA1..."
+# Chainlink AggregatorV3Interface address (ETH/USD on Sepolia).
+oracle_address = "0x694AA1769357215DE4FAC081bf1f309aDC325306"
 decimals = "8"
+# Trigger price in the oracle's native decimal units. Below this,
+# we sell.
 trigger_price = "2500.00"
-owner = "0x70997970..."
-sell_token = "..."
-buy_token = "..."
-sell_amount_wei = "..."
-buy_amount_wei = "..."
-valid_to_seconds = "..."
+# CoW order parameters (signed by the owner off-chain ahead of
+# time, then the module submits the pre-signed body on trigger).
+owner = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+sell_token = "0x6810e776880C02933D47DB1b9fc05908e5386b96"  # GNO on Sepolia
+buy_token = "0xfff9976782d46cc05630d1f6ebab18b2324d6b14"   # WETH on Sepolia
+sell_amount_wei = "1000000000000000000"  # 1 GNO
+buy_amount_wei  = "300000000000000000"   # 0.3 ETH
+valid_to_seconds = "4294967295"          # u32::MAX (no expiry)
 ```
 
-`[config]` is operator-supplied. The values are strings; the
-module parses them once at `init`. We will look at the parsing
-code in §4.
+Two patterns worth noting:
 
-## 3. The wit-bindgen adapter in `lib.rs` (15 minutes)
+- **`required` matches the WIT imports the module uses.** The
+  engine enforces this at instantiation - declaring a capability
+  the module does not use is fine; missing a capability the module
+  does use is a hard error.
+- **`[config]` values are stringly-typed in 0.2.** Your `init`
+  parses them; the M3 SDK's `OnceLock<Settings>` pattern (see
+  `price-alert`) is the recommended idiom.
 
-Open [`src/lib.rs`](../modules/examples/stop-loss/src/lib.rs). Top
-of the file:
+## 3. Write the strategy (60 minutes)
+
+The strategy logic splits into two layers:
+
+- A pure function that takes `&impl Host` and runs the decision
+  tree. This is what your tests exercise - no `wit-bindgen`, no
+  `wasmtime`, fast iteration.
+- A thin `Guest` impl in `lib.rs` that adapts the wit-bindgen-
+  generated host imports into a struct implementing
+  `shepherd_sdk::host::Host`.
+
+### 3a. The pure strategy (30 minutes)
+
+Sketch in `src/strategy.rs`:
 
 ```rust
+use alloy_primitives::{Address, I256};
+use alloy_sol_types::{SolCall, sol};
+use shepherd_sdk::chain::{eth_call_params, parse_eth_call_result};
+use shepherd_sdk::host::{Host, HostError, LogLevel};
+use shepherd_sdk::prelude::*;
+
+sol! {
+    interface AggregatorV3 {
+        function latestRoundData() external view returns (
+            uint80, int256 answer, uint256, uint256, uint80
+        );
+    }
+}
+
+pub struct Settings {
+    pub oracle_address: Address,
+    pub trigger_price_scaled: I256,
+    pub owner: Address,
+    pub sell_token: Address,
+    pub buy_token: Address,
+    pub sell_amount: U256,
+    pub buy_amount: U256,
+    pub valid_to: u32,
+}
+
+pub fn on_block<H: Host>(
+    host: &H,
+    chain_id: u64,
+    settings: &Settings,
+) -> Result<(), HostError> {
+    // 1. Read the oracle.
+    let call = AggregatorV3::latestRoundDataCall {};
+    let params = eth_call_params(&settings.oracle_address, &call.abi_encode());
+    let result_json = host.request(chain_id, "eth_call", &params)?;
+    let Some(bytes) = parse_eth_call_result(&result_json) else {
+        host.log(LogLevel::Warn, "stop-loss: cannot decode oracle result");
+        return Ok(());
+    };
+    let decoded = AggregatorV3::latestRoundDataCall::abi_decode_returns(&bytes)
+        .map_err(|e| HostError {
+            domain: "stop-loss".into(),
+            kind: shepherd_sdk::host::HostErrorKind::InvalidInput,
+            code: 0,
+            message: format!("oracle decode: {e}"),
+            data: None,
+        })?;
+    let price = decoded.answer;
+
+    // 2. Are we above trigger? Stay idle.
+    if price > settings.trigger_price_scaled {
+        host.log(LogLevel::Info, &format!("stop-loss idle (price={price})"));
+        return Ok(());
+    }
+
+    // 3. Dedup: did we already submit?
+    let dedup_key = format!("submitted:{:#x}", settings.owner);
+    if host.get(&dedup_key)?.is_some() {
+        host.log(LogLevel::Info, "stop-loss: already submitted, skipping");
+        return Ok(());
+    }
+
+    // 4. Build the OrderCreation. (See `twap-monitor` for the full
+    //    helper; for tutorial brevity we elide the JSON encoding.)
+    let body = build_order_body(settings)?;
+    let uid = host.submit_order(chain_id, &body)?;
+
+    // 5. Persist + log.
+    host.set(&dedup_key, uid.as_bytes())?;
+    host.log(LogLevel::Warn, &format!("stop-loss triggered, uid={uid}"));
+    Ok(())
+}
+
+fn build_order_body(_s: &Settings) -> Result<Vec<u8>, HostError> {
+    // Cross-reference: `modules/twap-monitor/src/lib.rs::build_order_creation`
+    // shows the full assembly path using cowprotocol::OrderCreation::
+    // from_signed_order_data + serde_json::to_vec.
+    todo!("see modules/twap-monitor for the canonical assembly")
+}
+```
+
+The shape to internalise:
+
+- **Every interaction with the world goes through `host`.** No
+  global wit-bindgen functions in the strategy; everything is a
+  method on `&impl Host`.
+- **The function is pure-ish:** the only effects are through the
+  host trait. Tests in §3c run this function against `MockHost`
+  and assert on the side effects (calls + log lines + state writes).
+- **Errors propagate but the loop should not abort on transient
+  failure.** Wrap upstream calls so a single bad event does not
+  poison the supervisor - see `price-alert`'s warn-and-return
+  pattern.
+
+### 3b. The Guest adapter (15 minutes)
+
+`src/lib.rs` adapts wit-bindgen's free functions into a struct that
+implements `Host`. This is mechanical and almost identical across
+modules:
+
+```rust
+#![allow(clippy::too_many_arguments)]
+
 wit_bindgen::generate!({
     path: ["../../../wit/nexum-host", "../../../wit/shepherd-cow"],
     world: "shepherd:cow/shepherd",
@@ -142,238 +280,237 @@ wit_bindgen::generate!({
 });
 
 mod strategy;
-```
 
-The `generate!` macro emits the per-cdylib `Guest` trait,
-`HostError` struct, and host import shims (`nexum::host::chain::
-request`, `local_store::set`, etc.) into this crate's scope.
-`generate_all` is required because the `shepherd:cow/shepherd`
-world cross-references types from `nexum:host/types` - see
-[`docs/sdk.md`](./sdk.md) for the gotcha.
+use std::sync::OnceLock;
+use shepherd_sdk::host::{
+    ChainHost, CowApiHost, HostError as SdkHostError, HostErrorKind as SdkHostErrorKind,
+    LocalStoreHost, LogLevel as SdkLogLevel, LoggingHost,
+};
 
-Below the macro, three blocks deserve attention:
+static SETTINGS: OnceLock<strategy::Settings> = OnceLock::new();
 
-### 3a. `WitBindgenHost` (~80 lines)
-
-```rust
 struct WitBindgenHost;
 
 impl ChainHost for WitBindgenHost {
-    fn request(&self, chain_id: u64, method: &str, params: &str)
-        -> Result<String, SdkHostError>
-    {
-        chain::request(chain_id, method, params).map_err(convert_err)
+    fn request(&self, chain_id: u64, method: &str, params: &str) -> Result<String, SdkHostError> {
+        nexum::host::chain::request(chain_id, method, params).map_err(convert_err)
     }
 }
-// ... LocalStoreHost / CowApiHost / LoggingHost ...
-```
 
-This is the bridge between wit-bindgen's free functions and the
-`shepherd_sdk::host::Host` trait the strategy works against. The
-shape is mechanical and identical across modules - copy it as-is
-into your own module, and a future declarative macro in
-`shepherd-sdk` will eventually elide it.
+impl LocalStoreHost for WitBindgenHost {
+    fn get(&self, key: &str) -> Result<Option<Vec<u8>>, SdkHostError> {
+        nexum::host::local_store::get(key).map_err(convert_err)
+    }
+    fn set(&self, key: &str, value: &[u8]) -> Result<(), SdkHostError> {
+        nexum::host::local_store::set(key, value).map_err(convert_err)
+    }
+    fn delete(&self, key: &str) -> Result<(), SdkHostError> {
+        nexum::host::local_store::delete(key).map_err(convert_err)
+    }
+    fn list_keys(&self, prefix: &str) -> Result<Vec<String>, SdkHostError> {
+        nexum::host::local_store::list_keys(prefix).map_err(convert_err)
+    }
+}
 
-### 3b. `convert_err` / `sdk_err_into_wit` / `convert_level`
+impl CowApiHost for WitBindgenHost {
+    fn submit_order(&self, chain_id: u64, body: &[u8]) -> Result<String, SdkHostError> {
+        shepherd::cow::cow_api::submit_order(chain_id, body).map_err(convert_err)
+    }
+}
 
-`wit_bindgen::generate!` emits a `HostError` struct into the
-module's own crate. `shepherd_sdk::host::HostError` is a *separate*
-type with the same fields. The three converters are 7-arm enum
-maps - mechanical, but necessary so the trait surface can stay
-world-neutral.
+impl LoggingHost for WitBindgenHost {
+    fn log(&self, level: SdkLogLevel, message: &str) {
+        nexum::host::logging::log(convert_level(level), message);
+    }
+}
 
-### 3c. `Guest for StopLoss`
+fn convert_err(e: HostError) -> SdkHostError {
+    SdkHostError {
+        domain: e.domain,
+        kind: match e.kind {
+            HostErrorKind::Unsupported => SdkHostErrorKind::Unsupported,
+            HostErrorKind::Unavailable => SdkHostErrorKind::Unavailable,
+            HostErrorKind::Denied => SdkHostErrorKind::Denied,
+            HostErrorKind::RateLimited => SdkHostErrorKind::RateLimited,
+            HostErrorKind::Timeout => SdkHostErrorKind::Timeout,
+            HostErrorKind::InvalidInput => SdkHostErrorKind::InvalidInput,
+            HostErrorKind::Internal => SdkHostErrorKind::Internal,
+        },
+        code: e.code,
+        message: e.message,
+        data: e.data,
+    }
+}
 
-```rust
+fn convert_level(l: SdkLogLevel) -> nexum::host::logging::Level {
+    use nexum::host::logging::Level::*;
+    match l {
+        SdkLogLevel::Trace => Trace,
+        SdkLogLevel::Debug => Debug,
+        SdkLogLevel::Info => Info,
+        SdkLogLevel::Warn => Warn,
+        SdkLogLevel::Error => Error,
+    }
+}
+
+struct StopLoss;
+
 impl Guest for StopLoss {
     fn init(config: Vec<(String, String)>) -> Result<(), HostError> {
-        let cfg = strategy::parse_config(&config).map_err(sdk_err_into_wit)?;
-        // ... log + cache in OnceLock ...
+        let parsed = strategy::Settings::from_config(&config)
+            .map_err(|e| HostError {
+                domain: "stop-loss".into(),
+                kind: HostErrorKind::InvalidInput,
+                code: 0,
+                message: e,
+                data: None,
+            })?;
+        let _ = SETTINGS.set(parsed);
+        nexum::host::logging::log(
+            nexum::host::logging::Level::Info,
+            "stop-loss: init ok",
+        );
+        Ok(())
     }
 
-    fn on_event(event: types::Event) -> Result<(), HostError> {
-        let Some(cfg) = SETTINGS.get() else { return Ok(()); };
-        if let types::Event::Block(block) = event {
-            strategy::on_block(&WitBindgenHost, block.chain_id, cfg)
-                .map_err(sdk_err_into_wit)?;
+    fn on_event(event: nexum::host::types::Event) -> Result<(), HostError> {
+        let Some(s) = SETTINGS.get() else {
+            return Ok(());
+        };
+        if let nexum::host::types::Event::Block(b) = event {
+            strategy::on_block(&WitBindgenHost, b.chain_id, s).map_err(|e| HostError {
+                domain: e.domain,
+                kind: match e.kind {
+                    SdkHostErrorKind::Unsupported => HostErrorKind::Unsupported,
+                    SdkHostErrorKind::Unavailable => HostErrorKind::Unavailable,
+                    SdkHostErrorKind::Denied => HostErrorKind::Denied,
+                    SdkHostErrorKind::RateLimited => HostErrorKind::RateLimited,
+                    SdkHostErrorKind::Timeout => HostErrorKind::Timeout,
+                    SdkHostErrorKind::InvalidInput => HostErrorKind::InvalidInput,
+                    SdkHostErrorKind::Internal => HostErrorKind::Internal,
+                },
+                code: e.code,
+                message: e.message,
+                data: e.data,
+            })?;
         }
         Ok(())
     }
 }
+
+export!(StopLoss);
 ```
 
-`init` parses + caches; `on_event` hands a `WitBindgenHost` to the
-strategy and translates the resulting `SdkHostError` back into the
-wit-bindgen one for the supervisor.
+The conversion code looks heavy but is one-time boilerplate. Copy
+it verbatim into every new module; only the `Guest` impl and
+`SETTINGS` initialisation change per module.
 
-`SETTINGS: OnceLock<strategy::Settings>` is the recommended
-single-init pattern. wasm32 modules are single-threaded so
-`OnceLock` is overkill on synchronisation but cheap and explicit
-about lifetime.
+### 3c. Unit tests against `MockHost` (15 minutes)
 
-## 4. The strategy in `strategy.rs` (45 minutes)
-
-Open [`src/strategy.rs`](../modules/examples/stop-loss/src/strategy.rs).
-This file is the heart of the module - the only one you would
-diff against if you rebased on a newer SDK.
-
-### 4a. `Settings` + `parse_config`
-
-The parser walks `Vec<(String, String)>` and produces a typed
-`Settings`. It returns `Result<Settings, shepherd_sdk::host::
-HostError>` so the upstream `Guest::init` can lift the failure
-straight into the wit-bindgen `HostError` envelope with no extra
-plumbing. `scale_signed` is a hand-rolled decimal-to-I256 scaler
-because alloy ships no `Decimal::parse_units` equivalent (yet).
-
-### 4b. `read_oracle`
+In `src/strategy.rs`, append:
 
 ```rust
-fn read_oracle<H: Host>(host: &H, chain_id: u64, oracle: Address)
-    -> Option<I256>
-{
-    let call_data = AggregatorV3::latestRoundDataCall {}.abi_encode();
-    let params = eth_call_params(&oracle, &call_data);
-    let result_json = host.request(chain_id, "eth_call", &params).ok()?;
-    let bytes = parse_eth_call_result(&result_json)?;
-    AggregatorV3::latestRoundDataCall::abi_decode_returns(&bytes)
-        .ok()
-        .map(|r| r.answer)
-}
-```
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shepherd_sdk::host::*;
+    use shepherd_sdk_test::MockHost;
 
-Three SDK helpers in three lines: `chain::eth_call_params` builds
-the `[{to, data}, "latest"]` JSON, `chain::parse_eth_call_result`
-unpacks the `"0x..."` hex response. The `sol! interface AggregatorV3`
-declared at the top of the file gives us a typed call + return
-decoder; the same pattern works for any read-only EVM contract.
-
-Returning `Option<I256>` (with a Warn log on the error path inside
-the function) is intentional: the next block re-polls, and a
-single flaky RPC reply should not propagate into the supervisor.
-
-### 4c. `build_creation`
-
-The most interesting piece. Constructs a `cowprotocol::
-OrderCreation` body the orderbook accepts:
-
-```rust
-let chain = Chain::try_from(chain_id)?;
-let domain = chain.settlement_domain();
-let gpv2 = GPv2OrderData { ... };
-let order_data = gpv2_to_order_data(&gpv2)?;  // shepherd-sdk helper
-let uid = order_data.uid(&domain, settings.owner);
-let creation = OrderCreation::from_signed_order_data(
-    &order_data,
-    Signature::PreSign,    // owner has called setPreSignature on-chain
-    settings.owner,
-    EMPTY_APP_DATA_JSON.to_string(),
-    None,
-)?;
-```
-
-Three load-bearing decisions:
-
-- **`Signature::PreSign`**: the module ships no ECDSA. The order
-  owner is expected to have called `GPv2Signing.setPreSignature`
-  on-chain ahead of the trigger. The body shipped to the orderbook
-  carries the owner address and an empty signature; the orderbook
-  validates by checking the on-chain pre-signature record at
-  settlement.
-- **`gpv2_to_order_data`**: the `shepherd-sdk` helper that maps the
-  on-chain `bytes32` markers (`kind`, balance sources) onto
-  cowprotocol's typed enums. Same code-path twap-monitor and
-  ethflow-watcher take after the BLEU-843 refactor.
-- **`order_data.uid(&domain, settings.owner)`**: computes the
-  canonical 56-byte UID locally. The orderbook's `POST /api/v1/
-  orders` returns the same UID; the module uses the local version
-  to dedup *before* paying for the network round-trip.
-
-### 4d. `on_block`
-
-The dispatch loop:
-
-```rust
-pub fn on_block<H: Host>(host: &H, chain_id: u64, settings: &Settings)
-    -> Result<(), HostError>
-{
-    let price = read_oracle(host, chain_id, settings.oracle_address) else { return Ok(()) };
-
-    if price > settings.trigger_price_scaled {
-        // idle - log and wait for the next block
-        return Ok(());
-    }
-
-    let (creation, uid) = build_creation(chain_id, settings)?;
-    let uid_hex = format!("{uid}");
-
-    // Dedup: skip if already submitted OR previously dropped.
-    if host.get(&format!("submitted:{uid_hex}"))?.is_some() { return Ok(()); }
-    if host.get(&format!("dropped:{uid_hex}"))?.is_some()   { return Ok(()); }
-
-    let body = serde_json::to_vec(&creation)?;
-    match host.submit_order(chain_id, &body) {
-        Ok(server_uid) => {
-            host.set(&format!("submitted:{server_uid}"), b"")?;
-            host.log(LogLevel::Warn, &format!("TRIGGERED, uid={server_uid}"));
+    fn settings(trigger_scaled: i64) -> Settings {
+        Settings {
+            oracle_address: "0x694AA1769357215DE4FAC081bf1f309aDC325306".parse().unwrap(),
+            trigger_price_scaled: I256::try_from(trigger_scaled).unwrap(),
+            owner: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8".parse().unwrap(),
+            sell_token: Address::ZERO,
+            buy_token: Address::ZERO,
+            sell_amount: U256::ZERO,
+            buy_amount: U256::ZERO,
+            valid_to: 0xffff_ffff,
         }
-        Err(err) => match classify_api_error(err.data.as_deref()) {
-            RetryAction::TryNextBlock | RetryAction::Backoff { .. } => {
-                // log and let the next block re-attempt
-            }
-            RetryAction::Drop => {
-                host.set(&format!("dropped:{uid_hex}"), b"")?;
-                // log + give up - the orderbook will not accept the
-                // same body on a retry
-            }
-        },
     }
-    Ok(())
+
+    /// Encode a Chainlink `latestRoundData` return for tests.
+    fn oracle_returns(answer: i64) -> String {
+        let returns = AggregatorV3::latestRoundDataCall::abi_encode_returns(&(
+            0u128,
+            I256::try_from(answer).unwrap(),
+            U256::ZERO,
+            U256::ZERO,
+            0u128,
+        ));
+        let hex = alloy_primitives::hex::encode_prefixed(returns);
+        format!("\"{hex}\"")
+    }
+
+    #[test]
+    fn idle_when_price_above_trigger() {
+        let host = MockHost::new();
+        let s = settings(/*trigger*/ 1_000);
+        // Oracle returns 2000 (above the 1000 trigger).
+        host.chain.respond_to(
+            "eth_call",
+            &shepherd_sdk::chain::eth_call_params(
+                &s.oracle_address,
+                &AggregatorV3::latestRoundDataCall {}.abi_encode(),
+            ),
+            Ok(oracle_returns(2000)),
+        );
+
+        on_block(&host, 11_155_111, &s).unwrap();
+
+        assert_eq!(host.cow_api.call_count(), 0);
+        assert!(host.logging.contains("stop-loss idle"));
+    }
+
+    #[test]
+    fn triggers_below_threshold_once() {
+        let host = MockHost::new();
+        let s = settings(/*trigger*/ 1_000);
+        host.chain.respond_to(
+            "eth_call",
+            &shepherd_sdk::chain::eth_call_params(
+                &s.oracle_address,
+                &AggregatorV3::latestRoundDataCall {}.abi_encode(),
+            ),
+            Ok(oracle_returns(500)),
+        );
+        host.cow_api.respond(Ok("0xdeadbeef".into()));
+
+        // First block: submits.
+        on_block(&host, 11_155_111, &s).unwrap();
+        assert_eq!(host.cow_api.call_count(), 1);
+        assert!(host.logging.contains("triggered"));
+
+        // Second block at the same price: dedup'd by the
+        // `submitted:` key.
+        on_block(&host, 11_155_111, &s).unwrap();
+        assert_eq!(host.cow_api.call_count(), 1);
+        assert!(host.logging.contains("already submitted"));
+    }
 }
 ```
 
-The `shepherd_sdk::cow::classify_api_error` helper is the BLEU-829
-retry contract - it maps the orderbook's typed `ApiError` into
-`TryNextBlock` / `Backoff` / `Drop`. The module's only role here is
-to act on the verdict: log and idle, or persist a `dropped:` flag
-so the next block does not re-attempt.
+Run with `cargo test -p stop-loss`. Both tests should pass on a
+plain host - no wasm toolchain involved.
 
-### 4e. Tests at the bottom
+The takeaway: any time you can express a behaviour as "given this
+host state, do that", the `MockHost` route is faster to iterate
+than a full engine restart.
 
-Seven tests cover the dispatch matrix:
-
-- `idle_when_price_above_trigger`
-- `triggers_and_submits_once_then_dedups`
-- `permanent_submit_error_marks_dropped` (+ confirms dedup on the
-  next block)
-- `transient_submit_error_leaves_state_unchanged`
-- `oracle_rpc_error_is_warn_and_continue`
-- `parse_config_round_trips_settings` + `parse_config_rejects_
-  missing_owner`
-
-All seven run against `shepherd_sdk_test::MockHost`. `host.chain.
-respond_to(...)` programs the oracle return; `host.cow_api.respond
-(...)` programs the orderbook response; assertions read
-`host.store.snapshot()` and `host.logging.contains(...)`. No
-`wasmtime`, no network, no fixture wasm bundle.
-
-## 5. Build the `.wasm` (5 minutes)
-
-You already did this in §0. Re-build to confirm the strategy edits
-compile:
+## 4. Build the `.wasm` artefact (5 minutes)
 
 ```sh
 cargo build --target wasm32-wasip2 --release -p stop-loss
 ls -lh target/wasm32-wasip2/release/stop_loss.wasm
 ```
 
-If the file ballooned past ~500 KB, look at
+Expected size: 250–350 KB. If it ballooned past ~500 KB, look at
 `cargo tree -p stop-loss --target wasm32-wasip2` - usually a fresh
 dependency pulled `reqwest` or `tokio` into the wasm graph.
 
-## 6. Wire `engine.toml` and run it (10 minutes)
+## 5. Wire `engine.toml` and run it (10 minutes)
 
-Add a Sepolia RPC entry:
+Add an RPC endpoint for Sepolia in `engine.toml`:
 
 ```toml
 [chains.11155111]
@@ -381,7 +518,9 @@ rpc_url = "wss://ethereum-sepolia-rpc.publicnode.com"
 ```
 
 WebSocket is required because the `[[subscription]]` is `kind =
-"block"`. Run:
+"block"` and block subscriptions ride `eth_subscribe`.
+
+Run the engine pointed at your new module:
 
 ```sh
 cargo run -p nexum-engine -- \
@@ -389,35 +528,35 @@ cargo run -p nexum-engine -- \
   modules/examples/stop-loss/module.toml
 ```
 
-Expected output:
+Expected output on first run (one log per:
 
-- `init`: `stop-loss init: owner=0x... trigger=...`
-- on each new block: `stop-loss idle: price=... > trigger=...`
-  while the oracle stays above the threshold, then `stop-loss
-  TRIGGERED: ...` if the price ever drops at or below.
+- `init`: `stop-loss: init ok`
+- on each new block: either `stop-loss idle` (price above trigger)
+  or `stop-loss triggered, uid=0x...` then `already submitted`
+  on subsequent blocks.
 
 If the engine reports `unsupported` for any capability, double-
-check `[capabilities].required` matches the imports the strategy
-exercises.
+check that the module's `[capabilities].required` list matches the
+imports the strategy actually uses.
 
-For multi-module operation (running stop-loss alongside other
-strategies), see the BLEU-818 supervisor PR.
+## 6. Where to go from here (10 minutes)
 
-## 7. Where to go from here (10 minutes)
-
-- **Production hardening**: tune `[engine.limits].fuel_per_event`
-  and `memory_bytes` for your hardware - see [`docs/deployment.md`](
-  ./deployment.md) for the operator runbook.
-- **A different strategy**: copy `modules/examples/stop-loss/`,
-  rename, and change `on_block`. The wit-bindgen adapter in
-  `lib.rs` is identical for every module; only `strategy.rs` and
-  `module.toml::[config]` move.
-- **Custom signing**: swap `Signature::PreSign` for
-  `Signature::Eip1271(bytes)` when the owner is a Safe with an
-  isValidSignature handler - same pattern ethflow-watcher uses.
-- **Multi-chain operation**: change `[[subscription]].chain_id`
-  and add the `engine.toml::[chains.<id>]` entry. The strategy
-  stays unchanged because every host call passes `chain_id`
+- **Production hardening**: replace the synthetic `init` with the
+  per-module fuel + memory limits in `engine.toml::[engine.limits]`
+  (see [`docs/deployment.md`](./deployment.md)).
+- **Real order assembly**: the `build_order_body` `todo!` in §3a
+  is the only piece this tutorial elided. Cross-reference
+  [`modules/twap-monitor/src/lib.rs::build_order_creation`]  - 
+  it's the canonical assembly path
+  (`cowprotocol::OrderCreation::from_signed_order_data` +
+  `serde_json::to_vec`).
+- **Tests for the adapter layer**: the wit-bindgen ↔ `Host`
+  conversion functions are mechanical but worth a smoke test that
+  forces each enum variant through. See `shepherd-sdk-test`'s own
+  tests for the pattern.
+- **Multi-chain operation**: change `[[subscription]].chain_id` and
+  the `engine.toml::[chains.<id>]` entry. The strategy stays
+  unchanged because every host call already passes `chain_id`
   through.
 
 ## Time-budget check
@@ -425,20 +564,17 @@ strategies), see the BLEU-818 supervisor PR.
 If a section ran much longer than the rough estimate above, please
 file an issue tagged `docs/tutorial` with the section that dragged.
 The target is **<4h cold from a fresh checkout to a successful run
-in §6**, and we tighten the prose against feedback.
+in §5**, and we tighten the prose against feedback.
 
 ## Reference index
 
 - SDK overview: [`docs/sdk.md`](./sdk.md)
 - Deployment runbook: [`docs/deployment.md`](./deployment.md)
-- The example: [`modules/examples/stop-loss/`](
-  ../modules/examples/stop-loss/)
 - ADR-0001 (`engine.toml` vs `module.toml` split)
 - ADR-0006 (TWAP / EthFlow as guest modules, no specialised
   WIT interfaces)
 - ADR-0007 (push protocol primitives to `cow-rs` first)
-- Worked examples that share the same recipe:
-  [`price-alert`](../modules/examples/price-alert/),
+- Worked examples: [`price-alert`](../modules/examples/price-alert/),
   [`balance-tracker`](../modules/examples/balance-tracker/),
   [`twap-monitor`](../modules/twap-monitor/),
   [`ethflow-watcher`](../modules/ethflow-watcher/)

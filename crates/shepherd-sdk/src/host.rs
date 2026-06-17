@@ -13,13 +13,11 @@
 //!
 //! `wit_bindgen::generate!` emits a `HostError` struct into each
 //! module's own crate, so its identity is per-module. The SDK
-//! exposes [`HostError`] (this module) with the same field shape  -
+//! exposes [`HostError`] (this module) with the same field shape  - 
 //! modules wire a one-liner `From` impl between the two so the
 //! traits stay world-neutral and the mocks compile without a wasm
 //! toolchain. See `shepherd-sdk-test`'s README for the adapter
 //! pattern.
-
-use strum::IntoStaticStr;
 
 /// Severity for log messages routed through [`LoggingHost::log`].
 /// Mirrors `nexum:host/logging.level`.
@@ -40,16 +38,7 @@ pub enum LogLevel {
 /// Coarse categorisation of host failures, mirrored verbatim from
 /// `nexum:host/types.host-error-kind` so a module's wit-bindgen
 /// `HostErrorKind` can convert one-to-one.
-///
-/// `IntoStaticStr` exposes each variant as a snake_case `&'static
-/// str` so module strategies and the engine can wire structured-log
-/// and metric labels straight off the enum without an
-/// `error_kind` ladder per call site. `#[non_exhaustive]` lets the
-/// runtime grow new kinds (e.g. a dedicated `WasmTrap`) without
-/// breaking downstream `match` sites.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, IntoStaticStr)]
-#[strum(serialize_all = "snake_case")]
-#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum HostErrorKind {
     /// Capability declared but not provisioned by the operator.
     Unsupported,
@@ -142,47 +131,5 @@ pub trait LoggingHost {
 /// A blanket impl is provided for any type that implements all four
 /// component traits, so callers do not have to add a redundant
 /// `impl Host for MyHost {}`.
-///
-/// # Example
-///
-/// Strategy functions are generic over [`Host`]. Production code plugs
-/// the per-module `WitBindgenHost` adapter (see `modules/examples/`);
-/// unit tests plug `shepherd_sdk_test::MockHost`.
-///
-/// ```
-/// use shepherd_sdk::host::{
-///     ChainHost, CowApiHost, Host, HostError, LocalStoreHost, LogLevel, LoggingHost,
-/// };
-///
-/// /// Pure strategy logic - no wit-bindgen calls in here.
-/// fn record_block<H: Host>(host: &H, chain_id: u64, key: &str) -> Result<(), HostError> {
-///     host.log(LogLevel::Info, "recording block");
-///     host.set(key, b"")?;
-///     let _block_number = host.request(chain_id, "eth_blockNumber", "[]")?;
-///     Ok(())
-/// }
-///
-/// // Minimal hand-rolled host so the doctest is self-contained.
-/// // Real modules wire `shepherd_sdk_test::MockHost` here.
-/// # struct StubHost;
-/// # impl ChainHost for StubHost {
-/// #     fn request(&self, _: u64, _: &str, _: &str) -> Result<String, HostError> {
-/// #         Ok("\"0x0\"".into())
-/// #     }
-/// # }
-/// # impl LocalStoreHost for StubHost {
-/// #     fn get(&self, _: &str) -> Result<Option<Vec<u8>>, HostError> { Ok(None) }
-/// #     fn set(&self, _: &str, _: &[u8]) -> Result<(), HostError> { Ok(()) }
-/// #     fn delete(&self, _: &str) -> Result<(), HostError> { Ok(()) }
-/// #     fn list_keys(&self, _: &str) -> Result<Vec<String>, HostError> { Ok(vec![]) }
-/// # }
-/// # impl CowApiHost for StubHost {
-/// #     fn submit_order(&self, _: u64, _: &[u8]) -> Result<String, HostError> { Ok("".into()) }
-/// # }
-/// # impl LoggingHost for StubHost {
-/// #     fn log(&self, _: LogLevel, _: &str) {}
-/// # }
-/// record_block(&StubHost, 1, "block:42").unwrap();
-/// ```
 pub trait Host: ChainHost + LocalStoreHost + CowApiHost + LoggingHost {}
 impl<T: ChainHost + LocalStoreHost + CowApiHost + LoggingHost> Host for T {}
