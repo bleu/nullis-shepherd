@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/nexum-engine",
+    "crates/shepherd-sdk",
     "modules/ethflow-watcher",
     "modules/example",
     "modules/twap-monitor",
