@@ -328,7 +328,8 @@ impl Supervisor {
                 .await
             {
                 Ok(Ok(())) => {
-                    let latency_ms = start.elapsed().as_millis() as u64;
+                    let elapsed = start.elapsed();
+                    let latency_ms = elapsed.as_millis() as u64;
                     debug!(
                         module = %module.name,
                         chain_id,
@@ -337,10 +338,17 @@ impl Supervisor {
                         latency_ms,
                         "dispatch ok"
                     );
+                    metrics::histogram!(
+                        "shepherd_event_latency_seconds",
+                        "module" => module.name.clone(),
+                        "event_kind" => "block",
+                    )
+                    .record(elapsed.as_secs_f64());
                     dispatched += 1;
                 }
                 Ok(Err(host_err)) => {
-                    let latency_ms = start.elapsed().as_millis() as u64;
+                    let elapsed = start.elapsed();
+                    let latency_ms = elapsed.as_millis() as u64;
                     warn!(
                         module = %module.name,
                         chain_id,
@@ -352,9 +360,16 @@ impl Supervisor {
                         message = %host_err.message,
                         "on-event returned host-error",
                     );
+                    metrics::counter!(
+                        "shepherd_module_errors_total",
+                        "module" => module.name.clone(),
+                        "error_kind" => format!("{:?}", host_err.kind),
+                    )
+                    .increment(1);
                 }
                 Err(trap) => {
-                    let latency_ms = start.elapsed().as_millis() as u64;
+                    let elapsed = start.elapsed();
+                    let latency_ms = elapsed.as_millis() as u64;
                     error!(
                         module = %module.name,
                         chain_id,
@@ -364,6 +379,12 @@ impl Supervisor {
                         error = %trap,
                         "on-event trapped - module marked dead, removed from dispatch",
                     );
+                    metrics::counter!(
+                        "shepherd_module_errors_total",
+                        "module" => module.name.clone(),
+                        "error_kind" => "trap",
+                    )
+                    .increment(1);
                     module.alive = false;
                 }
             }
@@ -404,7 +425,8 @@ impl Supervisor {
             .await
         {
             Ok(Ok(())) => {
-                let latency_ms = start.elapsed().as_millis() as u64;
+                let elapsed = start.elapsed();
+                let latency_ms = elapsed.as_millis() as u64;
                 debug!(
                     module = %module_name,
                     chain_id,
@@ -413,10 +435,17 @@ impl Supervisor {
                     latency_ms,
                     "dispatch ok"
                 );
+                metrics::histogram!(
+                    "shepherd_event_latency_seconds",
+                    "module" => module_name.to_string(),
+                    "event_kind" => "log",
+                )
+                .record(elapsed.as_secs_f64());
                 true
             }
             Ok(Err(host_err)) => {
-                let latency_ms = start.elapsed().as_millis() as u64;
+                let elapsed = start.elapsed();
+                let latency_ms = elapsed.as_millis() as u64;
                 warn!(
                     module = %module_name,
                     chain_id,
@@ -428,10 +457,17 @@ impl Supervisor {
                     message = %host_err.message,
                     "on-event returned host-error",
                 );
+                metrics::counter!(
+                    "shepherd_module_errors_total",
+                    "module" => module_name.to_string(),
+                    "error_kind" => format!("{:?}", host_err.kind),
+                )
+                .increment(1);
                 false
             }
             Err(trap) => {
-                let latency_ms = start.elapsed().as_millis() as u64;
+                let elapsed = start.elapsed();
+                let latency_ms = elapsed.as_millis() as u64;
                 error!(
                     module = %module_name,
                     chain_id,
@@ -441,6 +477,12 @@ impl Supervisor {
                     error = %trap,
                     "on-event trapped - module marked dead, removed from dispatch",
                 );
+                metrics::counter!(
+                    "shepherd_module_errors_total",
+                    "module" => module_name.to_string(),
+                    "error_kind" => "trap",
+                )
+                .increment(1);
                 target.alive = false;
                 false
             }
