@@ -45,6 +45,35 @@ errors   = []
 trapped  = []
 poisoned = []
 
+# Per-module terminal-state log fingerprints. Derived from the
+# host.log() call sites inside modules/*/src/strategy.rs. Any one
+# match against `message` (when the event carries that module's
+# name) counts as a COW-1064 acceptance marker.
+MARKER_PATTERNS = {
+    "twap-monitor":    ["watch:", "indexed watch:", "poll watch:"],
+    "ethflow-watcher": ["ethflow submitted", "ethflow backoff", "ethflow dropped", "already submitted"],
+    "price-alert":     ["TRIGGERED"],
+    # balance-tracker logs each per-block diff as
+    # "0x<addr> changed +N wei (prior=..., current=...)".
+    "balance-tracker": ["changed +", "changed -"],
+    "stop-loss":       ["TRIGGERED", "retry on next block", "stop-loss submitted",
+                        "stop-loss dropped", "already submitted", "submitted:"],
+}
+
+def event_field(ev, key, default=None):
+    """tracing-subscriber's JSON formatter puts message / module /
+    block_number / target either at the top level (default) or
+    under a nested `fields` object (older versions / different
+    flatten modes). Look in both places."""
+    if not isinstance(ev, dict):
+        return default
+    if key in ev:
+        return ev[key]
+    fields = ev.get("fields")
+    if isinstance(fields, dict) and key in fields:
+        return fields[key]
+    return default
+
 # Engine emits JSON to stdout by default (no --pretty-logs). Each
 # line is one event.
 with open(LOG) as f:
@@ -56,21 +85,21 @@ with open(LOG) as f:
             ev = json.loads(line)
         except json.JSONDecodeError:
             continue
-        fields = ev.get("fields", {}) if isinstance(ev, dict) else {}
-        msg    = fields.get("message", "")
-        module = fields.get("module")
-        bn     = fields.get("block_number")
+        msg    = event_field(ev, "message", "") or ""
+        module = event_field(ev, "module")
+        bn     = event_field(ev, "block_number")
+        target = event_field(ev, "target", "") or ""
         if bn is not None:
             try:
                 blocks.append(int(bn))
             except (TypeError, ValueError):
                 pass
-        if isinstance(msg, str):
-            for needle in ("watch:", "submitted:", "dropped:", "backoff:", "TRIGGERED", "trapped"):
-                if needle in msg and module in markers:
+        if isinstance(msg, str) and module in markers:
+            for needle in MARKER_PATTERNS.get(module, []):
+                if needle in msg:
                     markers[module].append({"ts": ev.get("timestamp",""), "level": ev.get("level",""), "msg": msg})
                     break
-        if ev.get("level") == "ERROR" and ev.get("target","").startswith("nexum_engine"):
+        if ev.get("level") == "ERROR" and target.startswith("nexum_engine"):
             errors.append({"ts": ev.get("timestamp",""), "msg": msg})
         if "trapped" in msg and module:
             trapped.append({"module": module, "msg": msg})
