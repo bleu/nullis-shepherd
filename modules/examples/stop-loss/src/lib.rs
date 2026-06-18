@@ -70,6 +70,15 @@ impl CowApiHost for WitBindgenHost {
     fn submit_order(&self, chain_id: u64, body: &[u8]) -> Result<String, SdkHostError> {
         cow_api::submit_order(chain_id, body).map_err(convert_err)
     }
+    fn cow_api_request(
+        &self,
+        chain_id: u64,
+        method: &str,
+        path: &str,
+        body: Option<&str>,
+    ) -> Result<String, SdkHostError> {
+        cow_api::request(chain_id, method, path, body).map_err(convert_err)
+    }
 }
 
 impl LoggingHost for WitBindgenHost {

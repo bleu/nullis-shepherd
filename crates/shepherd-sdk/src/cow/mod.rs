@@ -10,10 +10,12 @@
 //! tested without wit-bindgen scaffolding and re-used unchanged by
 //! TWAP, EthFlow, and future strategy modules.
 
+pub mod app_data;
 pub mod composable;
 pub mod error;
 pub mod order;
 
+pub use app_data::resolve_app_data;
 pub use composable::{IConditionalOrder, PollOutcome, decode_revert};
 pub use error::{RetryAction, classify_api_error, try_decode_api_error};
 pub use order::gpv2_to_order_data;
