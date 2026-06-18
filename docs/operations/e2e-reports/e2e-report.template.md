@@ -81,16 +81,16 @@ Target: `block delta >= 1500` to clear the COW-1064 acceptance bar
 
 | Metric | Start | End | Delta |
 |---|---|---|---|
-| `shepherd_module_errors_total{module="...",reason="trap"}` (per module) | | | |
+| `shepherd_module_errors_total{module="...",error_kind="trap"}` (per module) | | | |
 | `shepherd_module_restarts_total{module="..."}` (per module) | | | |
 | `shepherd_module_poisoned{module="..."}` (gauge, end-state per module) | n/a | | n/a |
-| `shepherd_cow_api_submit_total{result="ok"}` | | | |
-| `shepherd_cow_api_submit_total{result="err"}` | | | |
-| `shepherd_chain_request_total{result="ok"}` | | | |
-| `shepherd_chain_request_total{result="err"}` | | | |
+| `shepherd_cow_api_submit_total{outcome="ok"}` | | | |
+| `shepherd_cow_api_submit_total{outcome="err"}` | | | |
+| `shepherd_chain_request_total{outcome="ok"}` | | | |
+| `shepherd_chain_request_total{outcome="err"}` | | | |
 | `shepherd_stream_reconnects_total{kind="block"}` | | | |
 | `shepherd_stream_reconnects_total{kind="log"}` | | | |
-| `shepherd_event_latency_seconds` (p50 / p95 / p99) | | | |
+| `shepherd_event_latency_seconds` (p50 / p95 / p99 per module) | | | |
 
 ## 6. Anomalies + defects
 
@@ -106,7 +106,7 @@ Target: `block delta >= 1500` to clear the COW-1064 acceptance bar
 
 - [ ] `block delta >= 1500` (≥ 5 h coverage)
 - [ ] All 5 modules have ≥ 1 terminal-state marker in section 4
-- [ ] `shepherd_module_errors_total{reason="trap"}` for well-behaved modules == 0
+- [ ] `shepherd_module_errors_total{error_kind="trap"}` for well-behaved modules == 0
 - [ ] No `[[modules]]`-listed module is `shepherd_module_poisoned == 1` at end
 - [ ] No `ERROR` lines from `nexum_engine` in the supervisor log
 - [ ] At least one orderbook submit attempt landed (`ok` or typed
