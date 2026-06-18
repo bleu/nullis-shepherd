@@ -72,9 +72,13 @@ engine_pid="$(cat "$STATE_FILE.pid.tmp")"
 rm "$STATE_FILE.pid.tmp"
 
 log "waiting for supervisor-ready (PID $engine_pid)"
+# The engine emits JSON to stdout (no --pretty-logs), so look for
+# the message + modules + chains fields in the JSON shape rather
+# than the pretty-printed `modules=5 chains=1` flat string.
 ready=0
-for _ in $(seq 1 60); do
-    if grep -q "supervisor ready modules=5 chains=1" "$log_file" 2>/dev/null; then
+for _ in $(seq 1 90); do
+    if grep -qE '"message":"supervisor ready"[^}]*"modules":5[^}]*"chains":1' "$log_file" 2>/dev/null \
+        || grep -qE '"message":"supervisor ready"[^}]*"chains":1[^}]*"modules":5' "$log_file" 2>/dev/null; then
         ready=1
         break
     fi
@@ -83,7 +87,7 @@ for _ in $(seq 1 60); do
     fi
     sleep 1
 done
-[[ $ready -eq 1 ]] || die "engine did not reach supervisor-ready in 60s. Tail: $(tail -20 "$log_file")"
+[[ $ready -eq 1 ]] || die "engine did not reach supervisor-ready in 90s. Tail: $(tail -20 "$log_file")"
 
 log "capturing baseline metrics → $metrics_start"
 curl -sf http://127.0.0.1:9100/metrics > "$metrics_start" \
