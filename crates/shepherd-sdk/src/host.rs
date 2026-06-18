@@ -23,7 +23,14 @@ use strum::IntoStaticStr;
 
 /// Severity for log messages routed through [`LoggingHost::log`].
 /// Mirrors `nexum:host/logging.level`.
+///
+/// Marked `#[non_exhaustive]` so the WIT can grow a new severity tier
+/// (e.g. `Critical`) without breaking downstream code that matches
+/// against the enum. Module adapters should provide a wildcard arm
+/// when converting SDK -> wit-bindgen `Level` so the new variant
+/// degrades gracefully to a safe default. See ADR-0009.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[non_exhaustive]
 pub enum LogLevel {
     /// Verbose tracing for development.
     Trace,
@@ -44,9 +51,14 @@ pub enum LogLevel {
 /// `IntoStaticStr` exposes each variant as a snake_case `&'static
 /// str` so module strategies and the engine can wire structured-log
 /// and metric labels straight off the enum without an
-/// `error_kind` ladder per call site. `#[non_exhaustive]` lets the
-/// runtime grow new kinds (e.g. a dedicated `WasmTrap`) without
-/// breaking downstream `match` sites.
+/// `error_kind` ladder per call site.
+///
+/// Marked `#[non_exhaustive]` so the WIT can grow a new kind (e.g.
+/// dedicated `WasmTrap`) without breaking downstream `match` sites.
+/// Module adapters should provide a wildcard arm when converting
+/// SDK -> wit-bindgen `HostErrorKind` (recommended fallback:
+/// `_ => HostErrorKind::Internal`, the most conservative remapping
+/// for an unrecognised SDK-side variant). See ADR-0009.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, IntoStaticStr)]
 #[strum(serialize_all = "snake_case")]
 #[non_exhaustive]
