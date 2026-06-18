@@ -90,6 +90,17 @@ macro_rules! bind_host_via_wit_bindgen {
             ) -> ::core::result::Result<::std::string::String, $crate::host::HostError> {
                 shepherd::cow::cow_api::submit_order(chain_id, body).map_err(convert_err)
             }
+
+            fn cow_api_request(
+                &self,
+                chain_id: u64,
+                method: &str,
+                path: &str,
+                body: ::core::option::Option<&str>,
+            ) -> ::core::result::Result<::std::string::String, $crate::host::HostError> {
+                shepherd::cow::cow_api::request(chain_id, method, path, body)
+                    .map_err(convert_err)
+            }
         }
 
         impl $crate::host::LoggingHost for WitBindgenHost {
