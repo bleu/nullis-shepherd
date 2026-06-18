@@ -8,6 +8,8 @@ members = [
     "modules/examples/balance-tracker",
     "modules/examples/price-alert",
     "modules/examples/stop-loss",
+    "modules/fixtures/fuel-bomb",
+    "modules/fixtures/memory-bomb",
     "modules/twap-monitor",
 ]
 resolver = "2"
