@@ -109,6 +109,10 @@ fn sdk_err_into_wit(e: SdkHostError) -> HostError {
             SdkHostErrorKind::Timeout => HostErrorKind::Timeout,
             SdkHostErrorKind::InvalidInput => HostErrorKind::InvalidInput,
             SdkHostErrorKind::Internal => HostErrorKind::Internal,
+            // Wildcard: `SdkHostErrorKind` is `#[non_exhaustive]` so the SDK
+            // can grow new variants without breaking module adapters. Fall back
+            // to `Internal` as the safest catch-all (COW-1029).
+            _ => HostErrorKind::Internal,
         },
         code: e.code,
         message: e.message,
@@ -123,6 +127,9 @@ fn convert_level(l: SdkLogLevel) -> logging::Level {
         SdkLogLevel::Info => logging::Level::Info,
         SdkLogLevel::Warn => logging::Level::Warn,
         SdkLogLevel::Error => logging::Level::Error,
+        // Wildcard: `SdkLogLevel` is `#[non_exhaustive]` (COW-1029).
+        // Fall back to `Info` for any future SDK-side variant.
+        _ => logging::Level::Info,
     }
 }
 

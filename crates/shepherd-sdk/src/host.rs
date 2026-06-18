@@ -21,7 +21,14 @@
 
 /// Severity for log messages routed through [`LoggingHost::log`].
 /// Mirrors `nexum:host/logging.level`.
+///
+/// Marked `#[non_exhaustive]` so the WIT can grow a new severity tier
+/// (e.g. `Critical`) without breaking downstream code that matches
+/// against the enum. Module adapters should provide a wildcard arm
+/// when converting SDK -> wit-bindgen `Level` so the new variant
+/// degrades gracefully to a safe default. See ADR-0009.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[non_exhaustive]
 pub enum LogLevel {
     /// Verbose tracing for development.
     Trace,
@@ -38,7 +45,15 @@ pub enum LogLevel {
 /// Coarse categorisation of host failures, mirrored verbatim from
 /// `nexum:host/types.host-error-kind` so a module's wit-bindgen
 /// `HostErrorKind` can convert one-to-one.
+///
+/// Marked `#[non_exhaustive]` so the WIT can grow a new kind (e.g.
+/// dedicated `WasmTrap`) without breaking downstream `match` sites.
+/// Module adapters should provide a wildcard arm when converting
+/// SDK -> wit-bindgen `HostErrorKind` (recommended fallback:
+/// `_ => HostErrorKind::Internal`, the most conservative remapping
+/// for an unrecognised SDK-side variant). See ADR-0009.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[non_exhaustive]
 pub enum HostErrorKind {
     /// Capability declared but not provisioned by the operator.
     Unsupported,
