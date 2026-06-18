@@ -137,6 +137,29 @@ pub trait CowApiHost {
     /// Submit an `OrderCreation` JSON body. The host returns the
     /// canonical order UID on success.
     fn submit_order(&self, chain_id: u64, body: &[u8]) -> Result<String, HostError>;
+
+    /// REST-style request against the CoW Protocol orderbook for the
+    /// given chain. The host routes to the correct base URL
+    /// (`https://api.cow.fi/<chain>/api/v1/...`). Returns the raw
+    /// response body. Strategies that need a typed surface should
+    /// wrap this in an SDK helper (see [`crate::cow::resolve_app_data`]).
+    ///
+    /// `method` is `"GET" | "POST" | "PUT" | "DELETE"`.
+    /// `path` is the absolute orderbook path beginning with `/api/v1`.
+    /// `body` is an optional JSON request body (only used for POST/PUT).
+    ///
+    /// Errors carry `code = 404` (and `kind = Unavailable`) on a
+    /// missing-resource response, so callers can distinguish
+    /// "orderbook does not know this resource" from a genuine upstream
+    /// failure by matching on `err.code` rather than introducing a new
+    /// `HostErrorKind` variant (which would require a WIT ABI bump).
+    fn cow_api_request(
+        &self,
+        chain_id: u64,
+        method: &str,
+        path: &str,
+        body: Option<&str>,
+    ) -> Result<String, HostError>;
 }
 
 /// `nexum:host/logging` - structured runtime logs.
@@ -190,6 +213,7 @@ pub trait LoggingHost {
 /// # }
 /// # impl CowApiHost for StubHost {
 /// #     fn submit_order(&self, _: u64, _: &[u8]) -> Result<String, HostError> { Ok("".into()) }
+/// #     fn cow_api_request(&self, _: u64, _: &str, _: &str, _: Option<&str>) -> Result<String, HostError> { Ok("".into()) }
 /// # }
 /// # impl LoggingHost for StubHost {
 /// #     fn log(&self, _: LogLevel, _: &str) {}

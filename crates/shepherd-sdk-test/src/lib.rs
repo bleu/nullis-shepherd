@@ -111,6 +111,15 @@ impl CowApiHost for MockHost {
     fn submit_order(&self, chain_id: u64, body: &[u8]) -> Result<String, HostError> {
         self.cow_api.submit_order(chain_id, body)
     }
+    fn cow_api_request(
+        &self,
+        chain_id: u64,
+        method: &str,
+        path: &str,
+        body: Option<&str>,
+    ) -> Result<String, HostError> {
+        self.cow_api.cow_api_request(chain_id, method, path, body)
+    }
 }
 
 impl LoggingHost for MockHost {
@@ -302,6 +311,14 @@ impl LocalStoreHost for MockLocalStore {
 pub struct MockCowApi {
     response: RefCell<Option<Result<String, HostError>>>,
     calls: RefCell<Vec<SubmitCall>>,
+    /// `cow_api_request` mock state. Keyed by `(method, path)` so
+    /// tests can program different responses for `GET
+    /// /api/v1/app_data/0x...` vs other endpoints. Falls back to the
+    /// unkeyed `request_response` if no key matches.
+    request_responses:
+        RefCell<std::collections::HashMap<(String, String), Result<String, HostError>>>,
+    request_response: RefCell<Option<Result<String, HostError>>>,
+    request_calls: RefCell<Vec<RequestCall>>,
 }
 
 /// One recorded [`MockCowApi::submit_order`] invocation.
@@ -311,6 +328,19 @@ pub struct SubmitCall {
     pub chain_id: u64,
     /// Raw `OrderCreation` JSON body.
     pub body: Vec<u8>,
+}
+
+/// One recorded [`MockCowApi::cow_api_request`] invocation.
+#[derive(Clone, Debug)]
+pub struct RequestCall {
+    /// Chain the guest targeted.
+    pub chain_id: u64,
+    /// HTTP-style verb.
+    pub method: String,
+    /// Absolute orderbook path, e.g. `/api/v1/app_data/0xabcd...`.
+    pub path: String,
+    /// Optional JSON body (for POST/PUT).
+    pub body: Option<String>,
 }
 
 impl MockCowApi {
@@ -343,6 +373,34 @@ impl MockCowApi {
     }
 }
 
+impl MockCowApi {
+    /// Program a response for a specific `(method, path)` pair.
+    /// Highest priority — used when both this and `respond_to_request`
+    /// are set.
+    pub fn respond_to_request_for(
+        &self,
+        method: impl Into<String>,
+        path: impl Into<String>,
+        result: Result<String, HostError>,
+    ) {
+        self.request_responses
+            .borrow_mut()
+            .insert((method.into(), path.into()), result);
+    }
+
+    /// Program the catch-all response for `cow_api_request` calls
+    /// that don't match a specific `(method, path)` key. Defaults
+    /// to host-side `Unsupported`.
+    pub fn respond_to_request(&self, result: Result<String, HostError>) {
+        *self.request_response.borrow_mut() = Some(result);
+    }
+
+    /// All `cow_api_request` invocations, in arrival order.
+    pub fn request_calls(&self) -> Vec<RequestCall> {
+        self.request_calls.borrow().clone()
+    }
+}
+
 impl CowApiHost for MockCowApi {
     fn submit_order(&self, chain_id: u64, body: &[u8]) -> Result<String, HostError> {
         self.calls.borrow_mut().push(SubmitCall {
@@ -353,6 +411,35 @@ impl CowApiHost for MockCowApi {
             Err(HostError::unsupported(
                 "cow-api",
                 "MockCowApi: no response configured",
+            ))
+        })
+    }
+
+    fn cow_api_request(
+        &self,
+        chain_id: u64,
+        method: &str,
+        path: &str,
+        body: Option<&str>,
+    ) -> Result<String, HostError> {
+        self.request_calls.borrow_mut().push(RequestCall {
+            chain_id,
+            method: method.to_string(),
+            path: path.to_string(),
+            body: body.map(str::to_string),
+        });
+        if let Some(r) = self
+            .request_responses
+            .borrow()
+            .get(&(method.to_string(), path.to_string()))
+            .cloned()
+        {
+            return r;
+        }
+        self.request_response.borrow().clone().unwrap_or_else(|| {
+            Err(HostError::unsupported(
+                "cow-api",
+                "MockCowApi: no cow_api_request response configured",
             ))
         })
     }
