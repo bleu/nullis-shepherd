@@ -41,7 +41,11 @@ load_env
 
 derived="$(cast wallet address --private-key "$OPERATOR_PRIVATE_KEY" 2>/dev/null)" \
     || die "cast wallet address failed — is OPERATOR_PRIVATE_KEY a valid 0x-prefixed 32-byte hex?"
-if [[ "${derived,,}" != "${TEST_EOA,,}" ]]; then
+# macOS still ships bash 3.2; ${var,,} (lowercase) is bash 4+ only,
+# so we route through `tr` for case-insensitive comparison.
+lower_derived="$(printf '%s' "$derived"  | tr '[:upper:]' '[:lower:]')"
+lower_expected="$(printf '%s' "$TEST_EOA" | tr '[:upper:]' '[:lower:]')"
+if [[ "$lower_derived" != "$lower_expected" ]]; then
     die "private key derives to $derived, expected $TEST_EOA — wrong EOA loaded"
 fi
 log "EOA: $derived"
