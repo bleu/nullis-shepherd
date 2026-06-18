@@ -36,6 +36,9 @@ require_cmd cast
 require_cmd curl
 require_cmd python3
 
+python3 -c 'import eth_abi, eth_utils, eth_hash.auto' 2>/dev/null \
+    || die "missing Python deps. Run: pip3 install eth-abi eth-utils \"eth-hash[pycryptodome]\""
+
 load_env
 [[ -n "${OPERATOR_PRIVATE_KEY:-}" ]] || die "OPERATOR_PRIVATE_KEY unset in scripts/.env"
 
@@ -60,43 +63,56 @@ fi
 
 twap_calldata="0x6bfae1ca000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000000010000000000000000000000006cf1e9ca41f7611def408122793c358a3d11e5a5000000000000000000000000000000000000000000000000000000006670f00000000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000000140000000000000000000000000fff9976782d46cc05630d1f6ebab18b2324d6b140000000000000000000000000625afb445c3b6b7b929342a04a22599fd5dbb5900000000000000000000000014995a1118caf95833e923faf8dd155721cd53c200000000000000000000000000000000000000000000000000038d7ea4c6800000000000000000000000000000000000000000000000000006f05b59d3b2000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000025800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
 
-log "submitting TWAP ComposableCoW.create() → $COMPOSABLE_COW"
-tx_twap="$(cast send \
-    --rpc-url    "$RPC_URL_SEPOLIA_HTTP" \
-    --private-key "$OPERATOR_PRIVATE_KEY" \
-    --json \
-    "$COMPOSABLE_COW" \
-    "$twap_calldata" \
-    | jq -r '.transactionHash')"
-[[ "$tx_twap" =~ ^0x[a-fA-F0-9]{64}$ ]] || die "TWAP tx hash malformed: $tx_twap"
-log "  TWAP tx: $tx_twap"
-log "  Etherscan: https://sepolia.etherscan.io/tx/$tx_twap"
-write_state "TX_TWAP=$tx_twap"
+# Idempotency: if a prior invocation already wrote a TX_TWAP hash
+# into .state, skip re-submitting (the ConditionalOrderCreated event
+# already fired; re-running would either drop a tx with the same
+# salt as a no-op, or — worse — bump the EOA's nonce for nothing).
+if existing_twap="$(state_value TX_TWAP 2>/dev/null)" && [[ -n "${existing_twap:-}" ]]; then
+    log "TWAP already submitted in a prior invocation — skipping (tx: $existing_twap)"
+    tx_twap="$existing_twap"
+else
+    log "submitting TWAP ComposableCoW.create() → $COMPOSABLE_COW"
+    tx_twap="$(cast send \
+        --rpc-url    "$RPC_URL_SEPOLIA_HTTP" \
+        --private-key "$OPERATOR_PRIVATE_KEY" \
+        --json \
+        "$COMPOSABLE_COW" \
+        "$twap_calldata" \
+        | jq -r '.transactionHash')"
+    [[ "$tx_twap" =~ ^0x[a-fA-F0-9]{64}$ ]] || die "TWAP tx hash malformed: $tx_twap"
+    log "  TWAP tx: $tx_twap"
+    log "  Etherscan: https://sepolia.etherscan.io/tx/$tx_twap"
+    write_state "TX_TWAP=$tx_twap"
+fi
 
 # ── Action 2: EthFlow.createOrder() ──────────────────────────────────
 
-log "fetching cow.fi /quote for EthFlow swap (0.005 ETH → COW)"
-quote_out="$(python3 "$SCRIPT_DIR/_ethflow_quote.py" "$TEST_EOA" 5000000000000000)" \
-    || die "EthFlow quote helper failed"
-ethflow_calldata="$(echo "$quote_out" | grep '^CALLDATA=' | cut -d= -f2-)"
-ethflow_value="$(echo "$quote_out" | grep '^VALUE_WEI=' | cut -d= -f2)"
-[[ "$ethflow_calldata" =~ ^0x[a-fA-F0-9]+$ ]] || die "EthFlow calldata malformed"
-[[ "$ethflow_value" =~ ^[0-9]+$ ]] || die "EthFlow value malformed: $ethflow_value"
-log "  msg.value = $ethflow_value wei ($(python3 -c "print(f'{$ethflow_value/1e18:.6f} ETH')"))"
+if existing_ethflow="$(state_value TX_ETHFLOW 2>/dev/null)" && [[ -n "${existing_ethflow:-}" ]]; then
+    log "EthFlow already submitted in a prior invocation — skipping (tx: $existing_ethflow)"
+else
+    log "fetching cow.fi /quote for EthFlow swap (0.005 ETH → COW)"
+    quote_out="$(python3 "$SCRIPT_DIR/_ethflow_quote.py" "$TEST_EOA" 5000000000000000)" \
+        || die "EthFlow quote helper failed"
+    ethflow_calldata="$(echo "$quote_out" | grep '^CALLDATA=' | cut -d= -f2-)"
+    ethflow_value="$(echo "$quote_out" | grep '^VALUE_WEI=' | cut -d= -f2)"
+    [[ "$ethflow_calldata" =~ ^0x[a-fA-F0-9]+$ ]] || die "EthFlow calldata malformed"
+    [[ "$ethflow_value" =~ ^[0-9]+$ ]] || die "EthFlow value malformed: $ethflow_value"
+    log "  msg.value = $ethflow_value wei ($(python3 -c "print(f'{$ethflow_value/1e18:.6f} ETH')"))"
 
-log "submitting EthFlow.createOrder() → $ETHFLOW"
-tx_ethflow="$(cast send \
-    --rpc-url    "$RPC_URL_SEPOLIA_HTTP" \
-    --private-key "$OPERATOR_PRIVATE_KEY" \
-    --value      "$ethflow_value" \
-    --json \
-    "$ETHFLOW" \
-    "$ethflow_calldata" \
-    | jq -r '.transactionHash')"
-[[ "$tx_ethflow" =~ ^0x[a-fA-F0-9]{64}$ ]] || die "EthFlow tx hash malformed: $tx_ethflow"
-log "  EthFlow tx: $tx_ethflow"
-log "  Etherscan: https://sepolia.etherscan.io/tx/$tx_ethflow"
-write_state "TX_ETHFLOW=$tx_ethflow"
+    log "submitting EthFlow.createOrder() → $ETHFLOW"
+    tx_ethflow="$(cast send \
+        --rpc-url    "$RPC_URL_SEPOLIA_HTTP" \
+        --private-key "$OPERATOR_PRIVATE_KEY" \
+        --value      "$ethflow_value" \
+        --json \
+        "$ETHFLOW" \
+        "$ethflow_calldata" \
+        | jq -r '.transactionHash')"
+    [[ "$tx_ethflow" =~ ^0x[a-fA-F0-9]{64}$ ]] || die "EthFlow tx hash malformed: $tx_ethflow"
+    log "  EthFlow tx: $tx_ethflow"
+    log "  Etherscan: https://sepolia.etherscan.io/tx/$tx_ethflow"
+    write_state "TX_ETHFLOW=$tx_ethflow"
+fi
 
 # ── Optional actions ─────────────────────────────────────────────────
 
