@@ -25,9 +25,13 @@ import urllib.request
 from eth_abi import encode
 from eth_utils import keccak
 
-COW_API = "https://api.cow.fi/sepolia/api/v1"
-NATIVE_ETH = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"
-BUY_TOKEN  = "0x0625aFB445C3B6B7B929342a04A22599fd5dBB59"  # COW Sepolia
+COW_API     = "https://api.cow.fi/sepolia/api/v1"
+# CoW's quote endpoint rejects the native-ETH sentinel
+# (`InvalidNativeSellToken`). EthFlow orders are quoted with the
+# wrapped form (WETH9 Sepolia) as the sell side and the EthFlow
+# contract handles the wrap on `createOrder` from `msg.value`.
+WETH_SEPOLIA = "0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14"
+BUY_TOKEN    = "0x0625aFB445C3B6B7B929342a04A22599fd5dBB59"  # COW Sepolia
 
 EMPTY_APP_DATA_JSON = "{}"
 EMPTY_APP_DATA_HASH = "0x" + keccak(EMPTY_APP_DATA_JSON.encode()).hex()
@@ -35,7 +39,7 @@ EMPTY_APP_DATA_HASH = "0x" + keccak(EMPTY_APP_DATA_JSON.encode()).hex()
 
 def fetch_quote(eoa: str, sell_amount_wei: int) -> dict:
     body = {
-        "sellToken":           NATIVE_ETH,
+        "sellToken":            WETH_SEPOLIA,
         "buyToken":             BUY_TOKEN,
         "from":                 eoa,
         "receiver":             eoa,
