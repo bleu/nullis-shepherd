@@ -126,24 +126,22 @@ Balance-tracker and stop-loss boot normally. The typed `HostError`
 carries `domain="price-alert"`, `kind=InvalidInput`, and a clear
 message identifying the field + the invalid character.
 
-**Observation (minor)**: `supervisor up count=3` lists the
-init-failed module as loaded, but the WARN line earlier flagged the
-failure. Reading the supervisor source:
+**Update (COW-1070, landed in this PR series)**: the supervisor now
+flips `alive = false` when `init` returns `Err`, and the boot log
+shows `supervisor up loaded=3 alive=2` so the discrepancy is
+visible. Re-running scenario 1.4 against live Sepolia after the fix:
 
-```rust
-// in load(): module stays in self.modules with alive=true even
-// when init returned Err. Subsequent on_event dispatches reach
-// the module's wit-bindgen Guest::on_event, which (in all M3
-// example modules) short-circuits via `SETTINGS.get().is_none()`.
-// Safe in practice but wastes per-block fuel on a no-op.
+```
+WARN init failed - module loaded but marked dead; dispatcher will skip it
+     module=price-alert kind=HostErrorKind::InvalidInput
+     "price-alert: invalid [config]: threshold: non-digit character in 'not-a-number'"
+INFO supervisor up loaded=3 alive=2
 ```
 
-The price-alert dispatch path was checked over 14 s of subsequent
-block flow - no `TRIGGERED` lines, confirming the strategy's
-`OnceLock<Settings>` empty-check guard fires. **Suggested
-follow-up**: flip `alive=false` on init failure in
-`supervisor::Supervisor::load`, or rename the boot log to
-`supervisor up alive=N loaded=M` so the distinction is visible.
+Subsequent block dispatches reach only the 2 alive modules; the
+init-failed price-alert is now skipped by the dispatch fast-path
+without surfacing the no-op fuel cost. Regression test:
+`supervisor::tests::init_failure_marks_module_dead_and_excludes_from_dispatch`.
 
 ---
 
@@ -201,7 +199,7 @@ ad-hoc inspector. Filed as a future M4-territory nice-to-have.
 | 1.1 | Bad RPC URL | ✅ structured error + clean exit | no |
 | 1.2 | Bad oracle address | ✅ Warn + module alive + clear decode error | no |
 | 1.3 | Capability mismatch | ✅ boot rejects with structured error chain | no |
-| 1.4 | Malformed `[config]` | ✅ typed `InvalidInput` (with 1 minor observation) | yes - flip `alive=false` on init failure |
+| 1.4 | Malformed `[config]` | ✅ typed `InvalidInput`; init-failed module marked dead + excluded from dispatch (COW-1070 fix) | resolved in this PR series |
 | 1.5 | Cross-restart persistence | ✅ redb file preserved + re-attaches cleanly | no (a state-dump CLI would help; M4 nice-to-have) |
 
 **One follow-up issue**: in `Supervisor::load`, when `init` returns
