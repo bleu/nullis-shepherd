@@ -41,6 +41,8 @@ TWAP=5
 ETHFLOW=5
 DURATION_MIN=1
 SCENARIO="baseline"
+PARALLEL=1
+BLOCK_TIME=1
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -48,19 +50,25 @@ while [[ $# -gt 0 ]]; do
         --ethflow-per-block) ETHFLOW="$2";       shift 2 ;;
         --duration-min)      DURATION_MIN="$2";  shift 2 ;;
         --scenario)          SCENARIO="$2";      shift 2 ;;
+        --parallel)          PARALLEL="$2";      shift 2 ;;
+        --block-time)        BLOCK_TIME="$2";    shift 2 ;;
         -h|--help)
             cat <<EOF
 usage: scripts/load-run.sh [--twap-per-block N] [--ethflow-per-block M]
                            [--duration-min K] [--scenario LABEL]
+                           [--parallel W] [--block-time S]
 EOF
             exit 0 ;;
         *) die "unknown arg: $1" ;;
     esac
 done
 
+# Exported so load-bootstrap.sh's anvil invocation picks it up.
+export LOAD_BLOCK_TIME="$BLOCK_TIME"
+
 trap load_teardown EXIT INT TERM
 
-log "scenario=$SCENARIO  TWAP/block=$TWAP  EthFlow/block=$ETHFLOW  duration=${DURATION_MIN}min"
+log "scenario=$SCENARIO  TWAP/block=$TWAP  EthFlow/block=$ETHFLOW  parallel=$PARALLEL  block-time=${BLOCK_TIME}s  duration=${DURATION_MIN}min"
 
 load_bootstrap
 
@@ -100,7 +108,8 @@ log "running tools/load-gen (release)"
     --anvil ws://localhost:8545 \
     --twap-per-block "$TWAP" \
     --ethflow-per-block "$ETHFLOW" \
-    --duration-min "$DURATION_MIN" ) \
+    --duration-min "$DURATION_MIN" \
+    --parallel "$PARALLEL" ) \
     >"$LOG_DIR/load-gen.log" 2>&1 &
 LOAD_GEN_PID=$!
 echo "LOAD_GEN_PID=$LOAD_GEN_PID" >>"$PID_FILE"
@@ -117,7 +126,7 @@ log "metrics snapshot (t=end) -> $metrics_end"
 
 mock_stats="$(curl -fsS http://localhost:9999/_stats 2>/dev/null || echo '{}')"
 
-report="$REPORTS_DIR/load-${TWAP}x${ETHFLOW}-$(date -u +%Y-%m-%d).md"
+report="$REPORTS_DIR/load-${TWAP}x${ETHFLOW}-${SCENARIO}-$(date -u +%Y-%m-%d).md"
 {
     echo "# Load test report - scenario=$SCENARIO"
     echo ""
