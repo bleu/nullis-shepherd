@@ -113,6 +113,13 @@ pub struct ChainConfig {
     /// transport (required for `eth_subscribe`); `http://` and `https://`
     /// engage the HTTP transport (request/response only).
     pub rpc_url: String,
+    /// Optional CoW orderbook base URL override for this chain. When
+    /// absent (the common case), the host uses the canonical
+    /// `api.cow.fi/{slug}/api/v1` URL from `cowprotocol::Chain`. Set
+    /// this to point at a staging/barn instance or a local mock (e.g.
+    /// `tools/orderbook-mock` for the COW-1079 load test).
+    #[serde(default)]
+    pub orderbook_url: Option<String>,
 }
 
 fn default_state_dir() -> PathBuf {
