@@ -67,7 +67,9 @@ Pre-flight:
 
 Required actions:
 1. **TWAP** — `cast send ComposableCoW.create((handler,salt,staticInput),true)`
-   with the 516-byte pinned calldata. Fires
+   with calldata derived freshly per invocation by
+   `scripts/_twap_calldata.py` (sets `t0 = now - 60` so part 0 is
+   Ready immediately; hardcoding `t0 = 0` is the COW-1077 bug). Fires
    `ConditionalOrderCreated` → twap-monitor logs `watch:`.
 2. **EthFlow** — calls `scripts/_ethflow_quote.py` to hit cow.fi
    `/api/v1/quote`, encodes the returned `EthFlowOrder.Data`,
