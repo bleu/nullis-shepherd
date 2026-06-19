@@ -34,11 +34,12 @@ load_bootstrap() {
 
     : >"$PID_FILE"
 
-    log "starting anvil fork of Sepolia (port 8545, --block-time 1)"
+    local block_time="${LOAD_BLOCK_TIME:-1}"
+    log "starting anvil fork of Sepolia (port 8545, --block-time ${block_time})"
     anvil \
         --fork-url      "$RPC_URL_SEPOLIA_HTTP" \
         --port          8545 \
-        --block-time    1 \
+        --block-time    "$block_time" \
         --silent \
         >"$LOG_DIR/anvil.log" 2>&1 &
     local anvil_pid=$!
