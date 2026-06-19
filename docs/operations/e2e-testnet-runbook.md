@@ -288,6 +288,44 @@ Inherits the M2 + M3 runbook tables. E2E-specific:
 
 ---
 
+## 5.5. Known upstream constraints on Sepolia
+
+These are not bugs in shepherd; they are documented gaps between
+the on-chain protocol and the Sepolia orderbook's validation
+config. The strategy code recognises each and degrades gracefully
+(Drop, not retry storm). The soak report should call them out so
+the reader does not file them as anomalies.
+
+### EthFlow `validTo = u32::MAX` → `ExcessiveValidTo`
+
+EthFlow on-chain orders carry `validTo = type(uint32).max` by
+design: cancellation is operator-controlled via the EthFlow
+contract, not orderbook-time-bounded. `cowprotocol::eth_flow`
+documents this as the canonical CoW-side shape on every chain.
+
+The Sepolia orderbook's max-validTo cap rejects this shape with
+`errorType = "ExcessiveValidTo"`. Every `POST /api/v1/orders`
+ethflow-watcher forwards on Sepolia therefore terminates as
+`Drop` (since COW-1075 host fix; before that fix the same case
+manifested as an infinite `backoff:` loop).
+
+Operator-visible behaviour after the COW-1076 strategy refinement:
+
+- `ethflow dropped <uid> (400): orderbook error (ExcessiveValidTo)...`
+- Log level: **Info** (not Warn).
+- `dropped:{uid}` marker written exactly once per placement.
+- The soak's Prometheus
+  `shepherd_cow_api_submit_total{outcome="err"}` curve grows by
+  exactly the EthFlow placement count, then stops.
+
+Tracking: [COW-1076](https://linear.app/bleu-builders/issue/COW-1076).
+Upstream confirmation with the cowprotocol/services team is
+pending; if mainnet also rejects this shape the design needs
+revisiting at the contract level (which is out of scope for
+shepherd).
+
+---
+
 ## 6. References
 
 - M2 runbook (sister doc): `docs/operations/m2-testnet-runbook.md`
