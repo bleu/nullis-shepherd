@@ -12,6 +12,8 @@ members = [
     "modules/fixtures/fuel-bomb",
     "modules/fixtures/memory-bomb",
     "modules/twap-monitor",
+    "tools/load-gen",
+    "tools/orderbook-mock",
 ]
 resolver = "2"
 
