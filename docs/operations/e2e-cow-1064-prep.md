@@ -134,15 +134,28 @@ event is required for the acceptance marker.
 - New transaction → Transaction Builder
 - Enter contract address: `0xfdaFc9d1902f4e0b84f65F49f244b32b31013b74`
 - Toggle "Use custom data (hex encoded)" ON
-- Custom data:
+- Generate the calldata locally (do NOT paste a pinned blob - COW-1077):
 
-```
-0x6bfae1ca000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000000010000000000000000000000006cf1e9ca41f7611def408122793c358a3d11e5a5000000000000000000000000000000000000000000000000000000006670f00000000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000000140000000000000000000000000fff9976782d46cc05630d1f6ebab18b2324d6b140000000000000000000000000625afb445c3b6b7b929342a04a22599fd5dbb5900000000000000000000000014995a1118caf95833e923faf8dd155721cd53c200000000000000000000000000000000000000000000000000038d7ea4c6800000000000000000000000000000000000000000000000000006f05b59d3b2000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000025800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+```bash
+python3 scripts/_twap_calldata.py
 ```
 
-(516 bytes — the `create(ConditionalOrderParams, bool dispatch)`
-call with a 2-part TWAP from WETH → COW, 0.001 WETH per part,
-600 s between parts, salt pinned to `0x...6670f000`.)
+The helper backdates `t0` by 60 s on every invocation so part 0 is
+Ready immediately. The constants (sell/buy tokens, amounts, n, t,
+salt) mirror section 4.2; edit there + in the helper in lockstep
+if the TWAP shape changes.
+
+Copy the helper's stdout into the Transaction Builder's custom-data
+field. The blob is ~516 bytes - the `create(ConditionalOrderParams,
+bool dispatch)` call with a 2-part TWAP from WETH → COW, 0.001 WETH
+per part, 600 s between parts, salt pinned to `0x...6670f000`.
+
+> Historical note: a previously-pinned variant of this calldata
+> hardcoded `t0 = 0`, which silently produced an
+> `AFTER_TWAP_FINISHED` revert on every poll because
+> `calculateValidTo` divided `block.timestamp` by `t` and exceeded
+> `n`. Surfaced in the COW-1064 dry run (2026-06-18). Always derive
+> via the helper.
 
 - ETH value: `0`
 - Create batch → Send batch → sign with the EOA
@@ -274,6 +287,7 @@ print("0x" + uid.hex())
 ### 4.2 ComposableCoW.create() calldata
 
 ```python
+import time
 from eth_utils import keccak
 from eth_abi import encode
 
@@ -286,7 +300,7 @@ static = encode(
         "0x0625aFB445C3B6B7B929342a04A22599fd5dBB59",   # buyToken
         "0x14995a1118Caf95833e923faf8Dd155721cd53c2",   # receiver
         1_000_000_000_000_000, 500_000_000_000_000_000, # partSellAmount, minPartLimit
-        0, 2, 600, 0,                                   # t0, n, t, span
+        int(time.time()) - 60, 2, 600, 0,               # t0 (NEVER 0 - see COW-1077), n, t, span
         b"\x00" * 32,                                   # appData
     )]
 )
