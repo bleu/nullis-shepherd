@@ -80,16 +80,12 @@ pub fn resolve_app_data<H: CowApiHost + ?Sized>(
     })
 }
 
+/// Lowercase `0x`-prefixed hex of a 32-byte appData hash. Delegates
+/// to [`alloy_primitives::hex::encode`] (alloy is already a direct
+/// dependency of this crate) per mfw78's PR #8 guidance against
+/// carrying our own hex formatters.
 fn encode_hex(bytes: &[u8; 32]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(2 + 64);
-    out.push('0');
-    out.push('x');
-    for b in bytes {
-        out.push(HEX[(b >> 4) as usize] as char);
-        out.push(HEX[(b & 0xf) as usize] as char);
-    }
-    out
+    format!("0x{}", alloy_primitives::hex::encode(bytes))
 }
 
 /// Parse the orderbook's `/api/v1/app_data/{hash}` response shape:
