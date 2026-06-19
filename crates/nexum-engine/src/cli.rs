@@ -1,46 +1,32 @@
-//! Manual CLI parser. Kept hand-rolled (instead of pulling clap) because
-//! the surface is small and unlikely to grow in 0.2.
+//! CLI surface, parsed via `clap`'s derive API.
 
 use std::path::PathBuf;
 
-/// Parsed CLI surface.
-///
-/// `nexum-engine [<wasm-path> [<manifest-path>]] [--engine-config <path>]`
-///
-/// Positional `<wasm-path>` is a backwards-compat shortcut that
-/// synthesises a one-module engine config. Production deployments pass
-/// `--engine-config` and declare modules in TOML.
-#[derive(Debug, Default)]
-pub struct Cli {
-    pub wasm: Option<PathBuf>,
-    pub manifest: Option<PathBuf>,
-    pub engine_config: Option<PathBuf>,
-}
+use clap::Parser;
 
-impl Cli {
-    pub fn parse() -> Self {
-        let mut args = std::env::args().skip(1);
-        let mut cli = Self::default();
-        let mut positional = Vec::new();
-        while let Some(arg) = args.next() {
-            match arg.as_str() {
-                "--engine-config" => cli.engine_config = args.next().map(PathBuf::from),
-                "-h" | "--help" => {
-                    eprintln!(
-                        "usage: nexum-engine [<wasm-path> [<manifest-path>]] \
-                         [--engine-config <path>]"
-                    );
-                    std::process::exit(0);
-                }
-                _ => positional.push(arg),
-            }
-        }
-        if let Some(p) = positional.first() {
-            cli.wasm = Some(PathBuf::from(p));
-        }
-        if let Some(p) = positional.get(1) {
-            cli.manifest = Some(PathBuf::from(p));
-        }
-        cli
-    }
+/// `nexum-engine` argument parser.
+///
+/// Production deployments pass `--engine-config <path>` and declare
+/// modules in TOML. The positional `<wasm-path>` (with optional
+/// `<manifest-path>`) is a backwards-compat shortcut that synthesises
+/// a one-module engine config so the historical
+/// `cargo run -- ./modules/example/example.wasm` flow keeps working.
+#[derive(Debug, Parser)]
+#[command(
+    name = "nexum-engine",
+    about = "Multi-module supervisor for shepherd WASM components."
+)]
+pub struct Cli {
+    /// Positional WASM component to boot when `--engine-config` is
+    /// not supplied (or when its `[[modules]]` list is empty).
+    pub wasm: Option<PathBuf>,
+
+    /// Optional manifest (`module.toml`) sibling for the positional
+    /// `<wasm-path>`. Ignored when `--engine-config` is supplied.
+    pub manifest: Option<PathBuf>,
+
+    /// Path to the `engine.toml` describing chains + modules. When
+    /// omitted, falls back to the in-repo default (single-module mode).
+    #[arg(long, value_name = "PATH")]
+    pub engine_config: Option<PathBuf>,
 }

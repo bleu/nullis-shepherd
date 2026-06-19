@@ -3,32 +3,25 @@
 use super::types::KNOWN_CAPABILITIES;
 
 /// Errors returned while loading or validating a manifest.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum ParseError {
-    Io(std::io::Error),
-    Toml(toml::de::Error),
+    #[error("manifest: i/o: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("manifest: parse: {0}")]
+    Toml(#[from] toml::de::Error),
+    #[error(
+        "manifest: unknown capability {0:?} in [capabilities].required (known: {known})",
+        known = KNOWN_CAPABILITIES.join(", ")
+    )]
     UnknownCapability(String),
 }
 
-impl std::fmt::Display for ParseError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Io(e) => write!(f, "manifest: i/o: {e}"),
-            Self::Toml(e) => write!(f, "manifest: parse: {e}"),
-            Self::UnknownCapability(name) => write!(
-                f,
-                "manifest: unknown capability {:?} in [capabilities].required (known: {})",
-                name,
-                KNOWN_CAPABILITIES.join(", ")
-            ),
-        }
-    }
-}
-
-impl std::error::Error for ParseError {}
-
 /// Error returned when a component's WIT imports exceed its declared capabilities.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "component imports `{capability}` ({wit_import}) but it is not listed in \
+     [capabilities].required or [capabilities].optional"
+)]
 pub struct CapabilityViolation {
     /// Capability name (e.g. `"remote-store"`).
     pub capability: String,
@@ -36,16 +29,3 @@ pub struct CapabilityViolation {
     /// `"nexum:host/remote-store@0.2.0"`).
     pub wit_import: String,
 }
-
-impl std::fmt::Display for CapabilityViolation {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "component imports `{}` ({}) but it is not listed in \
-             [capabilities].required or [capabilities].optional",
-            self.capability, self.wit_import
-        )
-    }
-}
-
-impl std::error::Error for CapabilityViolation {}
