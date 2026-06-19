@@ -27,11 +27,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 LOG_DIR="${LOG_DIR:-/tmp/shepherd-load}"
 PID_FILE="/tmp/shepherd-load.pids"
-REPORTS_DIR="$REPO_ROOT/docs/operations/load-reports"
-mkdir -p "$LOG_DIR" "$REPORTS_DIR"
 
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/load-bootstrap.sh"
+# lib.sh (sourced transitively above) sets REPORTS_DIR to the COW-1064
+# e2e-reports/ directory; the load reports live under their own dir so
+# they do not collide with the live-Sepolia run reports.
+REPORTS_DIR="$REPO_ROOT/docs/operations/load-reports"
+mkdir -p "$LOG_DIR" "$REPORTS_DIR"
 
 # Defaults
 TWAP=5
