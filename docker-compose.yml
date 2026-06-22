@@ -79,15 +79,14 @@ services:
     # engine returns 200 even when individual modules are quarantined;
     # alert on `shepherd_module_poisoned` for that, not on health.
     healthcheck:
-      # `bash`'s `/dev/tcp` builtin is present in debian:bookworm-slim
-      # (the runtime base) without any extra package, so the
-      # healthcheck stays self-contained — adding `wget` or `curl`
-      # just for healthcheck purposes would inflate the runtime
-      # image. A successful TCP open on the metrics port proves the
-      # exporter is bound (which only happens after the supervisor
-      # finishes its boot path); failure marks the container
-      # unhealthy and compose/orchestrators react accordingly.
-      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9100"]
+      # `/dev/tcp/<host>/<port>` is a bash builtin, not POSIX sh —
+      # the default `CMD-SHELL` runs through `/bin/sh` (dash on
+      # debian:bookworm-slim), so we invoke `bash` explicitly. bash
+      # ships in the slim base by default; no extra apt install
+      # needed. A successful TCP open on the metrics port proves the
+      # supervisor finished its boot path and the metrics exporter
+      # bound. Failure marks the container unhealthy.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/9100"]
       interval: 30s
       timeout: 5s
       retries: 3
