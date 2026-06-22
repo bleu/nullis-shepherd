@@ -4,26 +4,14 @@
 //! drive it against `shepherd_sdk_test::MockHost`.
 
 use alloy_primitives::I256;
-use alloy_sol_types::{SolCall, sol};
-use shepherd_sdk::chain::{eth_call_params, parse_eth_call_result};
+use shepherd_sdk::chain::chainlink::read_latest_answer;
+use shepherd_sdk::config::{self, ConfigError};
 use shepherd_sdk::cow::{RetryAction, classify_api_error, gpv2_to_order_data};
 use shepherd_sdk::host::{Host, HostError, HostErrorKind, LogLevel};
 use shepherd_sdk::prelude::{
     Address, BuyTokenDestination, Bytes, Chain, EMPTY_APP_DATA_JSON, GPv2OrderData, OrderCreation,
     OrderKind, OrderUid, SellTokenSource, Signature, U256,
 };
-
-sol! {
-    interface AggregatorV3 {
-        function latestRoundData() external view returns (
-            uint80 roundId,
-            int256 answer,
-            uint256 startedAt,
-            uint256 updatedAt,
-            uint80 answeredInRound
-        );
-    }
-}
 
 /// Resolved configuration parsed from `module.toml::[config]`.
 #[derive(Clone, Debug)]
@@ -53,9 +41,9 @@ pub struct Settings {
 /// up via `?` so the supervisor can surface persistence issues - all
 /// other faults log and let the next block re-poll.
 pub fn on_block<H: Host>(host: &H, chain_id: u64, settings: &Settings) -> Result<(), HostError> {
-    let price = match read_oracle(host, chain_id, settings.oracle_address) {
+    let price = match read_latest_answer(host, chain_id, settings.oracle_address, "stop-loss") {
         Some(p) => p,
-        None => return Ok(()), // logged inside read_oracle
+        None => return Ok(()), // logged inside read_latest_answer
     };
 
     if price > settings.trigger_price_scaled {
@@ -148,30 +136,10 @@ pub fn on_block<H: Host>(host: &H, chain_id: u64, settings: &Settings) -> Result
     Ok(())
 }
 
-/// Fetch the oracle's latest answer, returning `None` (and logging a
-/// Warn) on any host or decode failure. The caller treats `None` as
-/// "skip this block".
-fn read_oracle<H: Host>(host: &H, chain_id: u64, oracle: Address) -> Option<I256> {
-    let call_data = AggregatorV3::latestRoundDataCall {}.abi_encode();
-    let params = eth_call_params(&oracle, &call_data);
-    let result_json = match host.request(chain_id, "eth_call", &params) {
-        Ok(s) => s,
-        Err(err) => {
-            host.log(
-                LogLevel::Warn,
-                &format!(
-                    "stop-loss oracle eth_call failed ({}): {}",
-                    err.code, err.message
-                ),
-            );
-            return None;
-        }
-    };
-    let bytes = parse_eth_call_result(&result_json)?;
-    AggregatorV3::latestRoundDataCall::abi_decode_returns(&bytes)
-        .ok()
-        .map(|r| r.answer)
-}
+// `read_oracle` moved into `shepherd_sdk::chain::chainlink::read_latest_answer`
+// (PR #55 review): the same flow + `Option<I256>` return shape now serves
+// price-alert + stop-loss from the SDK, with `domain: &str` carrying the
+// module label into the Warn log.
 
 /// Assemble the `OrderCreation` body + canonical UID from settings.
 /// Uses `Signature::PreSign` so the module ships zero ECDSA - the
@@ -233,10 +201,12 @@ fn build_creation(
 
 /// Parse `module.toml::[config]` into a typed [`Settings`].
 pub fn parse_config(entries: &[(String, String)]) -> Result<Settings, HostError> {
-    let oracle_address = require(entries, "oracle_address")?
+    let oracle_address = config::get_required(entries, "oracle_address")
+        .map_err(config_err)?
         .parse::<Address>()
         .map_err(|e| invalid(format!("oracle_address: {e}")))?;
-    let decimals = require(entries, "decimals")?
+    let decimals = config::get_required(entries, "decimals")
+        .map_err(config_err)?
         .parse::<u32>()
         .map_err(|e| invalid(format!("decimals: {e}")))?;
     if decimals > 38 {
@@ -244,23 +214,34 @@ pub fn parse_config(entries: &[(String, String)]) -> Result<Settings, HostError>
             "decimals={decimals} exceeds the I256 power-of-ten budget"
         )));
     }
-    let trigger_price_scaled = scale_signed(require(entries, "trigger_price")?, decimals)?;
-    let owner = require(entries, "owner")?
+    let trigger_price_scaled = config::scale_decimal(
+        config::get_required(entries, "trigger_price").map_err(config_err)?,
+        decimals,
+        "trigger_price",
+    )
+    .map_err(config_err)?;
+    let owner = config::get_required(entries, "owner")
+        .map_err(config_err)?
         .parse::<Address>()
         .map_err(|e| invalid(format!("owner: {e}")))?;
-    let sell_token = require(entries, "sell_token")?
+    let sell_token = config::get_required(entries, "sell_token")
+        .map_err(config_err)?
         .parse::<Address>()
         .map_err(|e| invalid(format!("sell_token: {e}")))?;
-    let buy_token = require(entries, "buy_token")?
+    let buy_token = config::get_required(entries, "buy_token")
+        .map_err(config_err)?
         .parse::<Address>()
         .map_err(|e| invalid(format!("buy_token: {e}")))?;
-    let sell_amount = require(entries, "sell_amount_wei")?
+    let sell_amount = config::get_required(entries, "sell_amount_wei")
+        .map_err(config_err)?
         .parse::<U256>()
         .map_err(|e| invalid(format!("sell_amount_wei: {e}")))?;
-    let buy_amount = require(entries, "buy_amount_wei")?
+    let buy_amount = config::get_required(entries, "buy_amount_wei")
+        .map_err(config_err)?
         .parse::<U256>()
         .map_err(|e| invalid(format!("buy_amount_wei: {e}")))?;
-    let valid_to = require(entries, "valid_to_seconds")?
+    let valid_to = config::get_required(entries, "valid_to_seconds")
+        .map_err(config_err)?
         .parse::<u32>()
         .map_err(|e| invalid(format!("valid_to_seconds: {e}")))?;
     Ok(Settings {
@@ -275,14 +256,9 @@ pub fn parse_config(entries: &[(String, String)]) -> Result<Settings, HostError>
     })
 }
 
-fn require<'a>(entries: &'a [(String, String)], key: &str) -> Result<&'a str, HostError> {
-    entries
-        .iter()
-        .find(|(k, _)| k == key)
-        .map(|(_, v)| v.as_str())
-        .ok_or_else(|| invalid(format!("missing key {key:?}")))
-}
-
+/// Lift a free-text invalid-config detail into the stop-loss `HostError`
+/// shape. Used when the SDK helper does not own the error (e.g. an
+/// `Address::from_str` failure or a `U256::from_str` overflow).
 fn invalid(message: impl Into<String>) -> HostError {
     HostError {
         domain: "stop-loss".into(),
@@ -293,52 +269,19 @@ fn invalid(message: impl Into<String>) -> HostError {
     }
 }
 
-fn scale_signed(threshold_decimal: &str, decimals: u32) -> Result<I256, HostError> {
-    let (sign, body) = if let Some(rest) = threshold_decimal.strip_prefix('-') {
-        (-1i32, rest)
-    } else {
-        (1, threshold_decimal)
-    };
-    let (whole, frac) = match body.split_once('.') {
-        Some((w, f)) => (w, f),
-        None => (body, ""),
-    };
-    if whole.is_empty() && frac.is_empty() {
-        return Err(invalid("trigger_price: empty"));
-    }
-    if !whole.chars().all(|c| c.is_ascii_digit()) || !frac.chars().all(|c| c.is_ascii_digit()) {
-        return Err(invalid(format!(
-            "trigger_price: non-digit character in {threshold_decimal:?}"
-        )));
-    }
-    let frac_len = frac.len() as u32;
-    let composed: String = if frac_len <= decimals {
-        let mut s = String::with_capacity(whole.len() + decimals as usize);
-        s.push_str(whole);
-        s.push_str(frac);
-        for _ in 0..(decimals - frac_len) {
-            s.push('0');
-        }
-        s
-    } else {
-        let mut s = String::with_capacity(whole.len() + decimals as usize);
-        s.push_str(whole);
-        s.push_str(&frac[..decimals as usize]);
-        s
-    };
-    let raw = if composed.is_empty() { "0" } else { &composed };
-    let unsigned: U256 = raw
-        .parse()
-        .map_err(|e| invalid(format!("trigger_price parse: {e}")))?;
-    let signed =
-        I256::try_from(unsigned).map_err(|e| invalid(format!("trigger_price range: {e}")))?;
-    Ok(if sign < 0 { -signed } else { signed })
+/// Project a `shepherd_sdk::config::ConfigError` into the stop-loss
+/// `HostError` shape via `Display`.
+fn config_err(e: ConfigError) -> HostError {
+    invalid(e.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use alloy_primitives::hex;
+    use alloy_sol_types::SolCall;
+    use shepherd_sdk::chain::chainlink::AggregatorV3;
+    use shepherd_sdk::chain::eth_call_params;
     use shepherd_sdk::host::HostErrorKind as Kind;
     use shepherd_sdk_test::MockHost;
 
