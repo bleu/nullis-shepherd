@@ -1,0 +1,19 @@
+# Prometheus scrape config consumed by the `observability` profile in
+# `docker-compose.yml`. Scrapes the engine's /metrics endpoint via the
+# compose DNS name `shepherd:9100`. Adjust intervals if you front a
+# Grafana stack and want denser samples.
+#
+# Metric surface is documented in `docs/production.md §7`.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 30s
+
+scrape_configs:
+  - job_name: shepherd
+    static_configs:
+      - targets: ["shepherd:9100"]
+        labels:
+          # Pin a deployment label so a multi-VM setup can tag where
+          # the scrape came from. Override per deployment.
+          deployment: "shepherd-vm"
