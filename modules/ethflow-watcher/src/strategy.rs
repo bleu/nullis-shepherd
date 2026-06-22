@@ -302,14 +302,49 @@ fn prior_outcome<H: Host>(host: &H, uid_hex: &str) -> Result<PriorOutcome, HostE
     Ok(PriorOutcome::None)
 }
 
+/// Maximum number of `backoff:` retries the strategy will tolerate
+/// before upgrading a UID to `dropped:`. Bounds the latent
+/// retry-forever path COW-1083 surfaced: an unparseable orderbook
+/// rejection (or a flaky CDN that keeps returning non-JSON 5xx
+/// bodies) falls through to `RetryAction::TryNextBlock`, and without
+/// a counter the same dead placement would be re-attempted on every
+/// log re-delivery for the lifetime of the watch. Five attempts is
+/// the round number from the issue write-up; it gives a flaky
+/// orderbook room to recover while still bounding the worst-case
+/// fan-out.
+const MAX_BACKOFF_RETRIES: u32 = 5;
+
 fn apply_submit_retry<H: Host>(host: &H, err: &HostError, uid_hex: &str) -> Result<(), HostError> {
     match classify_api_error(err.data.as_deref()) {
         RetryAction::TryNextBlock | RetryAction::Backoff { .. } => {
-            host.set(&format!("backoff:{uid_hex}"), b"")?;
-            host.log(
-                LogLevel::Warn,
-                &format!("ethflow backoff {uid_hex} ({}): {}", err.code, err.message),
-            );
+            let prior = read_backoff_count(host, uid_hex)?;
+            let next = prior + 1;
+            if next >= MAX_BACKOFF_RETRIES {
+                // Cap reached. Treat the persistent transient failure
+                // as terminal so dead placements stop re-arming on
+                // log re-delivery (COW-1083).
+                host.set(&format!("dropped:{uid_hex}"), b"")?;
+                let _ = host.delete(&format!("backoff:{uid_hex}"));
+                host.log(
+                    LogLevel::Warn,
+                    &format!(
+                        "ethflow dropped {uid_hex} after {next} retries on transient/unparseable rejection ({}): {}",
+                        err.code, err.message,
+                    ),
+                );
+            } else {
+                host.set(
+                    &format!("backoff:{uid_hex}"),
+                    next.to_string().as_bytes(),
+                )?;
+                host.log(
+                    LogLevel::Warn,
+                    &format!(
+                        "ethflow backoff {uid_hex} retry {next}/{MAX_BACKOFF_RETRIES} ({}): {}",
+                        err.code, err.message,
+                    ),
+                );
+            }
         }
         RetryAction::Drop => {
             host.set(&format!("dropped:{uid_hex}"), b"")?;
@@ -335,6 +370,25 @@ fn apply_submit_retry<H: Host>(host: &H, err: &HostError, uid_hex: &str) -> Resu
         }
     }
     Ok(())
+}
+
+/// Decode the `backoff:{uid}` marker's counter payload. Pre-COW-1083
+/// markers were written as empty bytes (`b""`); those are treated as
+/// zero so previously-set markers still get one fresh retry before
+/// the cap kicks in. Garbage values (non-ASCII / non-u32) also reset
+/// to zero to keep the strategy live in the face of a manual store
+/// edit.
+fn read_backoff_count<H: Host>(host: &H, uid_hex: &str) -> Result<u32, HostError> {
+    let Some(bytes) = host.get(&format!("backoff:{uid_hex}"))? else {
+        return Ok(0);
+    };
+    if bytes.is_empty() {
+        return Ok(0);
+    }
+    Ok(std::str::from_utf8(&bytes)
+        .ok()
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(0))
 }
 
 /// Does this submit-side failure look like the documented Sepolia-orderbook
@@ -723,6 +777,115 @@ mod tests {
                 .contains_key(&format!("dropped:{uid}"))
         );
         assert!(host.logging.contains("ethflow backoff"));
+        // COW-1083: the marker now carries an ASCII counter ("1" for
+        // the first retry) so subsequent attempts can detect the
+        // accumulated retry budget.
+        assert_eq!(
+            host.store.snapshot().get(&format!("backoff:{uid}")).map(Vec::as_slice),
+            Some(b"1".as_slice()),
+            "first retry persists count = 1"
+        );
+    }
+
+    #[test]
+    fn submit_transient_error_at_cap_upgrades_to_dropped_warn() {
+        // COW-1083 acceptance: after MAX_BACKOFF_RETRIES consecutive
+        // transient / unparseable rejections the strategy must Drop
+        // the UID so it stops re-arming on log re-delivery. The log
+        // line is Warn — this is the operator's signal that something
+        // is structurally wrong (a flaky CDN, an indexer hiccup,
+        // a poisoned envelope) rather than a normal transient.
+        let host = MockHost::new();
+        let event = sample_event_for_decode();
+        let (topics, data) = encode_log(&event);
+        let view = placement_log_view(ETH_FLOW_PRODUCTION.as_slice(), &topics, &data);
+        let placement =
+            decode_order_placement(ETH_FLOW_PRODUCTION.as_slice(), &topics, &data).unwrap();
+        let uid = programmed_uid(&placement);
+
+        // Seed `backoff:{uid}` at MAX-1 so the next retry trips the
+        // cap. ASCII bytes mirror the production marker payload.
+        host.store
+            .set(
+                &format!("backoff:{uid}"),
+                (MAX_BACKOFF_RETRIES - 1).to_string().as_bytes(),
+            )
+            .unwrap();
+
+        // Unparseable rejection: `data = None` is the case the issue
+        // names explicitly (host failed to forward the envelope or
+        // CDN returned non-JSON). `classify_api_error` falls back to
+        // TryNextBlock here, which is exactly when the counter matters.
+        host.cow_api.respond(Err(HostError {
+            domain: "cow-api".into(),
+            kind: Kind::Internal,
+            code: 502,
+            message: "bad gateway".into(),
+            data: None,
+        }));
+
+        on_logs(&host, &[view]).unwrap();
+
+        let snapshot = host.store.snapshot();
+        assert!(
+            snapshot.contains_key(&format!("dropped:{uid}")),
+            "Nth retry of an unparseable rejection must upgrade to dropped:"
+        );
+        assert!(
+            !snapshot.contains_key(&format!("backoff:{uid}")),
+            "terminal dropped: must clear the stale backoff: marker"
+        );
+        let drop_lines: Vec<_> = host
+            .logging
+            .lines()
+            .into_iter()
+            .filter(|l| l.message.contains("ethflow dropped") && l.message.contains("retries"))
+            .collect();
+        assert_eq!(drop_lines.len(), 1, "exactly one cap-upgrade line");
+        assert_eq!(
+            drop_lines[0].level,
+            LogLevel::Warn,
+            "cap upgrade is a Warn — operator signal something is structurally wrong"
+        );
+    }
+
+    #[test]
+    fn submit_transient_error_with_legacy_empty_marker_resets_counter() {
+        // Backwards compat: pre-COW-1083 markers were written as
+        // empty bytes (`b""`). Treat those as count = 0 so a
+        // single in-flight backoff at upgrade time does not get
+        // prematurely dropped — the marker gets one fresh attempt,
+        // which counts as retry 1.
+        let host = MockHost::new();
+        let event = sample_event_for_decode();
+        let (topics, data) = encode_log(&event);
+        let view = placement_log_view(ETH_FLOW_PRODUCTION.as_slice(), &topics, &data);
+        let placement =
+            decode_order_placement(ETH_FLOW_PRODUCTION.as_slice(), &topics, &data).unwrap();
+        let uid = programmed_uid(&placement);
+
+        host.store.set(&format!("backoff:{uid}"), b"").unwrap();
+
+        host.cow_api.respond(Err(HostError {
+            domain: "cow-api".into(),
+            kind: Kind::Internal,
+            code: 502,
+            message: "bad gateway".into(),
+            data: None,
+        }));
+
+        on_logs(&host, &[view]).unwrap();
+
+        let snapshot = host.store.snapshot();
+        assert_eq!(
+            snapshot.get(&format!("backoff:{uid}")).map(Vec::as_slice),
+            Some(b"1".as_slice()),
+            "legacy empty marker bumps to count = 1, not premature drop"
+        );
+        assert!(
+            !snapshot.contains_key(&format!("dropped:{uid}")),
+            "no upgrade to dropped: on first retry"
+        );
     }
 
     #[test]
