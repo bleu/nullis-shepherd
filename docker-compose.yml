@@ -79,7 +79,15 @@ services:
     # engine returns 200 even when individual modules are quarantined;
     # alert on `shepherd_module_poisoned` for that, not on health.
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:9100/metrics >/dev/null || exit 1"]
+      # `bash`'s `/dev/tcp` builtin is present in debian:bookworm-slim
+      # (the runtime base) without any extra package, so the
+      # healthcheck stays self-contained — adding `wget` or `curl`
+      # just for healthcheck purposes would inflate the runtime
+      # image. A successful TCP open on the metrics port proves the
+      # exporter is bound (which only happens after the supervisor
+      # finishes its boot path); failure marks the container
+      # unhealthy and compose/orchestrators react accordingly.
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9100"]
       interval: 30s
       timeout: 5s
       retries: 3
