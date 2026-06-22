@@ -22,22 +22,40 @@
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 #![allow(clippy::too_many_arguments)]
 
+// The wit-bindgen-generated import shims only resolve against the
+// engine's wasm component host — they have no native-target
+// equivalent. Cfg-gate the entire glue layer so the `rlib` artefact
+// (consumed by `shepherd-backtest`, COW-1078) carries just the
+// strategy code without dangling `extern "C"` imports. The
+// `use wit_bindgen as _` line below silences the unused-crate
+// lint on native targets where the macro never expands.
+#[cfg(not(target_arch = "wasm32"))]
+use wit_bindgen as _;
+
+#[cfg(target_arch = "wasm32")]
 wit_bindgen::generate!({
     path: ["../../wit/nexum-host", "../../wit/shepherd-cow"],
     world: "shepherd:cow/shepherd",
     generate_all,
 });
 
-mod strategy;
-
-use nexum::host::{logging, types};
+pub mod strategy;
 
 // `WitBindgenHost`, `convert_err`, `sdk_err_into_wit`, `convert_level`
 // are generated below. Single source of truth in `shepherd-sdk`.
+// Gated on `wasm32` so the strategy can be reused in native targets
+// (e.g. the backtest replay harness in `crates/shepherd-backtest`,
+// COW-1078).
+#[cfg(target_arch = "wasm32")]
+use nexum::host::{logging, types};
+
+#[cfg(target_arch = "wasm32")]
 shepherd_sdk::bind_host_via_wit_bindgen!();
 
+#[cfg(target_arch = "wasm32")]
 struct EthFlowWatcher;
 
+#[cfg(target_arch = "wasm32")]
 impl Guest for EthFlowWatcher {
     fn init(_config: Vec<(String, String)>) -> Result<(), HostError> {
         logging::log(logging::Level::Info, "ethflow-watcher init");
@@ -62,4 +80,5 @@ impl Guest for EthFlowWatcher {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
 export!(EthFlowWatcher);
