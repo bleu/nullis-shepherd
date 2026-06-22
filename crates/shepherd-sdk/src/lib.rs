@@ -81,9 +81,14 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 pub mod chain;
+pub mod config;
 pub mod cow;
 pub mod host;
 pub mod prelude;
+pub mod wit_bindgen_macro;
+
+#[cfg(test)]
+mod proptests;
 
 #[cfg(test)]
 mod tests {
