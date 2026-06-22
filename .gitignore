@@ -21,6 +21,9 @@ Thumbs.db
 # Environment
 .env
 .env.*
+# Exception: the committed template (operator copies it to `.env`,
+# which is then caught by the rule above).
+!.env.example
 
 # Agent skills / AI tooling — installed locally, never committed.
 .agents/
