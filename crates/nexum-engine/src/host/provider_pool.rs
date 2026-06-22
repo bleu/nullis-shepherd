@@ -85,9 +85,11 @@ impl ProviderPool {
         let sub = provider
             .subscribe_blocks()
             .await
-            .map_err(|source| ProviderError::Rpc {
+            .map_err(|e| ProviderError::Rpc {
                 method: "eth_subscribe(newHeads)".into(),
-                source,
+                detail: e.to_string(),
+                code: None,
+                data: None,
             })?;
         let stream = sub.into_stream().map(Ok::<_, ProviderError>);
         Ok(Box::pin(stream))
@@ -106,9 +108,11 @@ impl ProviderPool {
         let sub = provider
             .subscribe_logs(&filter)
             .await
-            .map_err(|source| ProviderError::Rpc {
+            .map_err(|e| ProviderError::Rpc {
                 method: "eth_subscribe(logs)".into(),
-                source,
+                detail: e.to_string(),
+                code: None,
+                data: None,
             })?;
         let stream = sub.into_stream().map(Ok::<_, ProviderError>);
         Ok(Box::pin(stream))
@@ -142,9 +146,29 @@ impl ProviderPool {
             provider
                 .raw_request(method.into(), params)
                 .await
-                .map_err(|source| ProviderError::Rpc {
-                    method: method_for_err,
-                    source,
+                .map_err(|e| {
+                    // When the node returns a JSON-RPC error response
+                    // (`{"error": {"code":..., "data":...}}`) — typically
+                    // an `eth_call` revert — capture the structured
+                    // payload so the host can forward it to
+                    // `HostError.data` (COW-1082). Transport-side
+                    // failures (timeouts, serde, etc.) leave both
+                    // `code` and `data` `None` so the projection can
+                    // tell "no ErrorResp" apart from "ErrorResp with
+                    // code = 0".
+                    let (code, data) = match e.as_error_resp() {
+                        Some(payload) => (
+                            Some(payload.code),
+                            payload.data.as_ref().map(|d| d.get().to_owned()),
+                        ),
+                        None => (None, None),
+                    };
+                    ProviderError::Rpc {
+                        method: method_for_err,
+                        detail: e.to_string(),
+                        code,
+                        data,
+                    }
                 })?;
         Ok(result.get().to_owned())
     }
@@ -195,13 +219,27 @@ pub enum ProviderError {
         source: serde_json::Error,
     },
     /// The node returned an error for the dispatched call.
-    #[error("rpc `{method}` failed: {source}")]
+    ///
+    /// When the underlying alloy `RpcError` carries a JSON-RPC
+    /// `ErrorResp` payload (the normal shape for `eth_call` reverts)
+    /// the structured `code` and `data` fields are propagated; for
+    /// transport-side failures both are blank (`code = None`,
+    /// `data = None`).
+    #[error("rpc `{method}` failed: {detail}")]
     Rpc {
         /// RPC method name.
         method: String,
-        /// Transport-side error.
-        #[source]
-        source: alloy_transport::TransportError,
+        /// Transport-side error string.
+        detail: String,
+        /// JSON-RPC error code from `ErrorResp.code`. `None` when
+        /// the failure was transport-level (no structured response).
+        code: Option<i64>,
+        /// JSON-encoded `ErrorResp.data` payload — for `eth_call`
+        /// reverts this is the quoted hex string of the abi-encoded
+        /// revert body (consumed by `shepherd_sdk::chain::
+        /// decode_revert_hex`). `None` when the failure was
+        /// transport-level.
+        data: Option<String>,
     },
 }
 
