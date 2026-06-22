@@ -3,6 +3,21 @@
 # Distinct from `nexum.toml` (per-module manifest): this file
 # describes the *engine*'s I/O wiring. Copy to `engine.toml` next to
 # the binary, or pass the path as the third positional argument.
+#
+# ## RPC scheme choice
+#
+# Every entry below uses `wss://`. The engine subscribes to blocks
+# and logs via `eth_subscribe`, which is a **WebSocket-only** JSON-RPC
+# method in the Ethereum protocol (HTTP transports return
+# "subscriptions are not available on this provider"). Every paid
+# provider (drpc, Alchemy, Infura, QuickNode) exposes both
+# `https://...` and `wss://...` for the same endpoint — pick the WS
+# form.
+#
+# If you have a chain that's consumed *only* by poll-style modules
+# (request/response `chain::request`, no block / log subscriptions),
+# set `require_ws = false` on that chain to silence the boot-time
+# fail-fast check.
 
 [engine]
 # Directory the local-store redb file (and future engine artefacts)
@@ -21,21 +36,20 @@ log_level = "info"
 # memory_bytes   = 67_108_864
 
 # One [chains.<id>] table per chain the engine should be able to talk
-# to. Chain ids are EVM decimal. `ws://` and `wss://` URLs engage
-# alloy's pubsub transport (needed for `eth_subscribe`); `http://` and
-# `https://` use the HTTP transport.
+# to. Chain ids are EVM decimal. Replace `<KEY>` placeholders with
+# your paid endpoint's API key.
 
-[chains.1]
-rpc_url = "https://ethereum-rpc.publicnode.com"
+[chains.1]                                   # Ethereum Mainnet
+rpc_url = "wss://eth-mainnet.g.alchemy.com/v2/<KEY>"
 
-[chains.100]
-rpc_url = "https://rpc.gnosischain.com"
+[chains.100]                                 # Gnosis Chain
+rpc_url = "wss://gnosis-mainnet.g.alchemy.com/v2/<KEY>"
 
-[chains.11155111]
-rpc_url = "wss://ethereum-sepolia-rpc.publicnode.com"
+[chains.11155111]                            # Sepolia
+rpc_url = "wss://eth-sepolia.g.alchemy.com/v2/<KEY>"
 
-[chains.42161]
-rpc_url = "https://arb1.arbitrum.io/rpc"
+[chains.42161]                               # Arbitrum One
+rpc_url = "wss://arb-mainnet.g.alchemy.com/v2/<KEY>"
 
-[chains.8453]
-rpc_url = "https://mainnet.base.org"
+[chains.8453]                                # Base
+rpc_url = "wss://base-mainnet.g.alchemy.com/v2/<KEY>"
