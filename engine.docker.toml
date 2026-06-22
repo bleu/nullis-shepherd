@@ -1,0 +1,80 @@
+# Docker-ready engine config. Pre-wired for the file layout the
+# repo's `Dockerfile` bakes:
+#
+#   /opt/shepherd/modules/<name>.wasm        — compiled components
+#   /opt/shepherd/manifests/<name>.toml      — per-module manifests
+#   /var/lib/shepherd/                       — redb state (named volume)
+#
+# Workflow:
+#
+#   cp engine.docker.toml engine.toml
+#   $EDITOR engine.toml                       # replace <RPC_KEY> + drop
+#                                             # any [[modules]] / [chains.*]
+#                                             # you don't want to load
+#   docker compose up -d
+#
+# Mount target inside the container is `/etc/shepherd/engine.toml`
+# (see docker-compose.yml). Keep this file at the repo root for
+# operators who clone the repo on the VM.
+
+[engine]
+state_dir = "/var/lib/shepherd"
+log_level = "info"
+
+[engine.metrics]
+enabled = true
+# Bind to all interfaces inside the container so the compose port
+# mapping (127.0.0.1:9100 host -> 9100 container) reaches it. NEVER
+# publish `0.0.0.0:9100` on the host without authn — see
+# docs/production.md §7.
+bind_addr = "0.0.0.0:9100"
+
+# ---- chains ----
+#
+# One [chains.<id>] per chain you intend to subscribe to. `wss://`
+# unlocks `eth_subscribe` (block + log streams) and is required for
+# production; public RPCs throttle under sustained load (see the
+# baseline-latency finding for confirmation).
+#
+# Replace `<RPC_KEY>` with your paid endpoint's key. Drop entries
+# you don't need.
+
+[chains.1]                                   # Ethereum Mainnet
+rpc_url = "wss://eth-mainnet.g.alchemy.com/v2/<RPC_KEY>"
+
+[chains.100]                                 # Gnosis Chain
+rpc_url = "wss://gnosis-mainnet.g.alchemy.com/v2/<RPC_KEY>"
+
+[chains.11155111]                            # Sepolia (recommended for soak)
+rpc_url = "wss://eth-sepolia.g.alchemy.com/v2/<RPC_KEY>"
+
+[chains.42161]                               # Arbitrum One
+rpc_url = "wss://arb-mainnet.g.alchemy.com/v2/<RPC_KEY>"
+
+[chains.8453]                                # Base
+rpc_url = "wss://base-mainnet.g.alchemy.com/v2/<RPC_KEY>"
+
+# ---- modules ----
+#
+# The image bakes all five production modules at the paths below.
+# Comment out any you don't intend to run on this deployment.
+
+[[modules]]
+path = "/opt/shepherd/modules/twap_monitor.wasm"
+manifest = "/opt/shepherd/manifests/twap-monitor.toml"
+
+[[modules]]
+path = "/opt/shepherd/modules/ethflow_watcher.wasm"
+manifest = "/opt/shepherd/manifests/ethflow-watcher.toml"
+
+[[modules]]
+path = "/opt/shepherd/modules/price_alert.wasm"
+manifest = "/opt/shepherd/manifests/price-alert.toml"
+
+[[modules]]
+path = "/opt/shepherd/modules/balance_tracker.wasm"
+manifest = "/opt/shepherd/manifests/balance-tracker.toml"
+
+[[modules]]
+path = "/opt/shepherd/modules/stop_loss.wasm"
+manifest = "/opt/shepherd/manifests/stop-loss.toml"
