@@ -26,16 +26,18 @@ an operator surfaces a real need).
 git clone https://github.com/bleu/nullis-shepherd /opt/shepherd
 cd /opt/shepherd
 
-# Operator-supplied config. Start from the example, fill in the
-# paid-RPC URL (Alchemy / Infura / QuickNode) for every chain you
-# want the engine to subscribe to.
-cp engine.example.toml engine.toml
-${EDITOR:-vi} engine.toml
+# Operator-supplied RPC URLs. `.env` is gitignored; the template
+# committed at `.env.example` lists every variable the engine
+# substitutes into `engine.docker.toml` via `${VAR}` placeholders.
+cp .env.example .env
+${EDITOR:-vi} .env                # paste your paid wss:// URLs
 
 # Pull the published image (no local build needed).
 docker compose pull
 
-# Start the engine.
+# Start the engine. Compose reads `.env` automatically and passes
+# the listed variables into the container, where the engine
+# substitutes them at config-load time.
 docker compose up -d
 
 # Logs (JSON line-per-event, see `docs/production.md §5`).
@@ -58,8 +60,18 @@ the public internet without authn — see `docs/production.md §7`.
 
 ## 2. Configuring `engine.toml`
 
-The image bind-mounts `./engine.toml` at `/etc/shepherd/engine.toml`
-read-only. Minimum production shape:
+The image bind-mounts the committed `engine.docker.toml` at
+`/etc/shepherd/engine.toml` read-only. It uses `${VAR}` placeholders
+for every paid-RPC URL, which the engine substitutes at load time
+from environment (Docker compose forwards them in from `.env`).
+A missing variable fails the boot fast with the exact name.
+
+To run with a custom config (different module mix, extra chains)
+instead of `engine.docker.toml`, point compose at it via
+`SHEPHERD_ENGINE_CONFIG=./engine.local.toml` in `.env` — the bind
+mount picks up whichever path is set.
+
+Minimum production shape if you write your own:
 
 ```toml
 [engine]
@@ -70,14 +82,15 @@ log_level = "info"
 enabled = true
 bind_addr = "0.0.0.0:9100"        # inside the container; compose maps to 127.0.0.1
 
-# One per chain you subscribe to. WS URLs unlock `eth_subscribe`
-# (block + log streams); HTTP URLs degrade to polling and are not
-# recommended for production.
+# One per chain you subscribe to. `${VAR}` placeholders are
+# substituted at load time from environment — keep the actual URL
+# in `.env`, not in any committed file. Must be `wss://`; the
+# engine emits a boot-time ERROR otherwise (see docs/production.md §6).
 [chains.11155111]
-rpc_url = "wss://eth-sepolia.g.alchemy.com/v2/<KEY>"
+rpc_url = "${SEPOLIA_RPC_URL}"
 
 [chains.42161]
-rpc_url = "wss://arb-mainnet.g.alchemy.com/v2/<KEY>"
+rpc_url = "${ARBITRUM_RPC_URL}"
 
 # One [[modules]] per .wasm baked into /opt/shepherd/modules/.
 # `manifest` defaults to <path-parent>/module.toml if omitted.
@@ -91,14 +104,10 @@ manifest = "/opt/shepherd/manifests/ethflow-watcher.toml"
 # Add price-alert / balance-tracker / stop-loss the same way.
 ```
 
-For convenience, `engine.docker.toml` in the repo root ships the
-exact module path layout the image bakes; copy it as `engine.toml`,
-swap the placeholder RPC URLs, and you're done:
-
-```bash
-cp engine.docker.toml engine.toml
-${EDITOR:-vi} engine.toml   # replace <RPC_KEY> placeholders
-```
+If you want compose to use this file instead of the bundled
+`engine.docker.toml`, set `SHEPHERD_ENGINE_CONFIG=./engine.local.toml`
+in `.env` and put your file there (the `*.local.toml` pattern is
+already gitignored).
 
 Public RPCs throttle `eth_subscribe` + `eth_getLogs` under sustained
 load (independently confirmed by the baseline-latency tool — see
