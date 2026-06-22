@@ -5,17 +5,20 @@
 #   /opt/shepherd/manifests/<name>.toml      — per-module manifests
 #   /var/lib/shepherd/                       — redb state (named volume)
 #
+# Secrets come from env vars (see `.env.example`). The engine
+# substitutes `${VAR_NAME}` tokens at load time; a missing variable
+# fails fast with the exact name. `docker compose` reads the
+# repo-root `.env` automatically and forwards the listed variables
+# into the container.
+#
 # Workflow:
 #
-#   cp engine.docker.toml engine.toml
-#   $EDITOR engine.toml                       # replace <RPC_KEY> + drop
-#                                             # any [[modules]] / [chains.*]
-#                                             # you don't want to load
+#   cp .env.example .env
+#   $EDITOR .env                  # paste real wss:// RPC URLs
 #   docker compose up -d
 #
 # Mount target inside the container is `/etc/shepherd/engine.toml`
-# (see docker-compose.yml). Keep this file at the repo root for
-# operators who clone the repo on the VM.
+# (see docker-compose.yml).
 
 [engine]
 state_dir = "/var/lib/shepherd"
@@ -31,28 +34,24 @@ bind_addr = "0.0.0.0:9100"
 
 # ---- chains ----
 #
-# One [chains.<id>] per chain you intend to subscribe to. `wss://`
-# unlocks `eth_subscribe` (block + log streams) and is required for
-# production; public RPCs throttle under sustained load (see the
-# baseline-latency finding for confirmation).
-#
-# Replace `<RPC_KEY>` with your paid endpoint's key. Drop entries
-# you don't need.
+# Drop any [chains.<id>] entry whose `*_RPC_URL` env var isn't set.
+# Engines that subscribe (the default) require `wss://`; opt-out per
+# chain with `require_ws = false` for poll-only deployments.
 
 [chains.1]                                   # Ethereum Mainnet
-rpc_url = "wss://eth-mainnet.g.alchemy.com/v2/<RPC_KEY>"
+rpc_url = "${MAINNET_RPC_URL}"
 
 [chains.100]                                 # Gnosis Chain
-rpc_url = "wss://gnosis-mainnet.g.alchemy.com/v2/<RPC_KEY>"
+rpc_url = "${GNOSIS_RPC_URL}"
 
 [chains.11155111]                            # Sepolia (recommended for soak)
-rpc_url = "wss://eth-sepolia.g.alchemy.com/v2/<RPC_KEY>"
+rpc_url = "${SEPOLIA_RPC_URL}"
 
 [chains.42161]                               # Arbitrum One
-rpc_url = "wss://arb-mainnet.g.alchemy.com/v2/<RPC_KEY>"
+rpc_url = "${ARBITRUM_RPC_URL}"
 
 [chains.8453]                                # Base
-rpc_url = "wss://base-mainnet.g.alchemy.com/v2/<RPC_KEY>"
+rpc_url = "${BASE_RPC_URL}"
 
 # ---- modules ----
 #

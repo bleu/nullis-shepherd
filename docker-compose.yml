@@ -35,10 +35,12 @@ services:
     # Match docs/production.md §2 TimeoutStopSec=30s.
     stop_grace_period: 30s
     volumes:
-      # Operator-supplied engine config. Pull from the example via
-      # `cp engine.example.toml engine.toml` and edit the [chains.*]
-      # entries with the paid RPC URL before `docker compose up`.
-      - ./engine.toml:/etc/shepherd/engine.toml:ro
+      # Engine config. Default points at the committed
+      # `engine.docker.toml` template (uses `${VAR}` placeholders
+      # the engine substitutes from env at boot). Override with a
+      # bespoke `./engine.toml` by setting
+      # `SHEPHERD_ENGINE_CONFIG=./engine.toml` in `.env`.
+      - ${SHEPHERD_ENGINE_CONFIG:-./engine.docker.toml}:/etc/shepherd/engine.toml:ro
       # Local-store redb file lives on a named volume so it survives
       # container recreation (image upgrades).
       - shepherd-state:/var/lib/shepherd
@@ -50,6 +52,16 @@ services:
       - "127.0.0.1:9100:9100"
     environment:
       RUST_BACKTRACE: "1"
+      # Forward the paid-RPC URLs the engine substitutes into
+      # `engine.docker.toml` via `${VAR}` placeholders. Compose
+      # picks these up from the repo-root `.env` (gitignored;
+      # operator copies from `.env.example`). Missing variables
+      # fail fast at engine boot with the exact name.
+      MAINNET_RPC_URL:
+      GNOSIS_RPC_URL:
+      SEPOLIA_RPC_URL:
+      ARBITRUM_RPC_URL:
+      BASE_RPC_URL:
     # Defence-in-depth resource caps. The engine already caps each
     # module's wasmtime fuel + memory at 1B inst/event + 64 MiB; this
     # is the outer envelope on the host process.
