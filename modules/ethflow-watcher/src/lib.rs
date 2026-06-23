@@ -11,20 +11,31 @@ wit_bindgen::generate!({
 use alloy_primitives::{Address, B256, Bytes};
 use alloy_sol_types::SolEvent;
 use cowprotocol::{
-    CoWSwapOnchainOrders::OrderPlacement, ETH_FLOW_PRODUCTION, ETH_FLOW_STAGING, GPv2OrderData,
-    OnchainSignature,
+    BuyTokenDestination, Chain, CoWSwapOnchainOrders::OrderPlacement, ETH_FLOW_PRODUCTION,
+    ETH_FLOW_STAGING, GPv2OrderData, OnchainSignature, OrderData, OrderKind, OrderUid,
+    SellTokenSource,
 };
-use nexum::host::{logging, types};
+use nexum::host::{local_store, logging, types};
+use shepherd::cow::cow_api;
 
-/// Fully decoded payload of a `CoWSwapOnchainOrders.OrderPlacement` log.
-/// `GPv2OrderData` is ~300 bytes; box it so the struct stays cache-
-/// friendly when it later lands in the BLEU-833 submission path.
+/// Decoded payload of a `CoWSwapOnchainOrders.OrderPlacement` log.
+/// `GPv2OrderData` is ~300 bytes; box it to keep the struct
+/// cache-friendly when threaded through the observe path.
 #[derive(Debug)]
-#[allow(dead_code)] // Fields consumed by BLEU-833.
 struct DecodedPlacement {
+    /// EthFlow contract that emitted the event. EIP-1271 owner of
+    /// the resulting orderbook entry — used as the UID `owner` input.
+    contract: Address,
+    /// Native-token seller that called `createOrder`. Logged for
+    /// operator diagnostics; not the orderbook owner.
     sender: Address,
     order: Box<GPv2OrderData>,
+    /// Refund pointer / opaque placer metadata. Recorded by the
+    /// orderbook indexer in `ethflowData.userValidTo`; not consumed
+    /// by this module.
+    #[allow(dead_code)]
     signature: OnchainSignature,
+    #[allow(dead_code)]
     data: Bytes,
 }
 
@@ -39,11 +50,10 @@ impl Guest for EthFlowWatcher {
     fn on_event(event: types::Event) -> Result<(), HostError> {
         if let types::Event::Logs(logs) = event {
             for log in &logs {
-                if let Some(placement) = decode_order_placement(&log.address, &log.topics, &log.data)
+                if let Some(placement) =
+                    decode_order_placement(&log.address, &log.topics, &log.data)
                 {
-                    log_placement(&placement);
-                    // BLEU-833 will build OrderCreation + submit + apply
-                    // OrderPostError::retry_hint right here.
+                    observe_placement(log.chain_id, &placement)?;
                 }
             }
         }
@@ -52,8 +62,9 @@ impl Guest for EthFlowWatcher {
     }
 }
 
-/// Decode a raw event log against `CoWSwapOnchainOrders.OrderPlacement`,
-/// keeping the four fields the BLEU-833 submission path needs.
+// ---- decode (BLEU-832) ----
+
+/// Decode a raw event log against `CoWSwapOnchainOrders.OrderPlacement`.
 ///
 /// Returns `None` when:
 /// - the log's contract address is not one of the canonical `ETH_FLOW_*`
@@ -62,9 +73,6 @@ impl Guest for EthFlowWatcher {
 ///   leak through);
 /// - topic0 does not match the event signature; or
 /// - the ABI body fails to decode (truncated, wrong layout).
-///
-/// Kept on plain slices so the host-free unit tests can call it without
-/// wit-bindgen scaffolding.
 fn decode_order_placement(
     address: &[u8],
     topics: &[Vec<u8>],
@@ -88,6 +96,7 @@ fn decode_order_placement(
         .collect();
     let decoded = OrderPlacement::decode_raw_log(words, data).ok()?;
     Some(DecodedPlacement {
+        contract,
         sender: decoded.sender,
         order: Box::new(decoded.order),
         signature: decoded.signature,
@@ -95,18 +104,108 @@ fn decode_order_placement(
     })
 }
 
-fn log_placement(p: &DecodedPlacement) {
-    logging::log(
-        logging::Level::Info,
-        &format!(
-            "ethflow OrderPlacement sender={:#x} sell={:#x} buy={:#x} valid_to={} sig_scheme={:?}",
-            p.sender,
-            p.order.sellToken,
-            p.order.buyToken,
-            p.order.validTo,
-            p.signature.scheme,
-        ),
-    );
+// ---- observe + verify (BLEU-833 revised — COW-1076) ----
+
+/// Compute the orderbook UID for the placement and confirm the
+/// orderbook's native EthFlow indexer picked it up.
+///
+/// Background (COW-1076): the orderbook backend indexes
+/// `OrderPlacement` events server-side and creates the order entry
+/// with its dual-validTo bookkeeping (on-chain `validTo = u32::MAX`
+/// for chain compatibility, off-chain `ethflowData.userValidTo`
+/// derived from the embedded placer payload). The public
+/// `POST /api/v1/orders` endpoint applies the generic validity cap
+/// and rejects EthFlow shapes with `ExcessiveValidTo`; there is no
+/// path through it that produces the same result as the native
+/// indexer. This module therefore observes the event and verifies
+/// the indexer caught it, instead of submitting.
+fn observe_placement(chain_id: u64, placement: &DecodedPlacement) -> Result<(), HostError> {
+    let uid_hex = match compute_uid(chain_id, placement) {
+        Some(uid) => format!("{uid}"),
+        None => {
+            logging::log(
+                logging::Level::Warn,
+                &format!(
+                    "ethflow uid build skipped (sender={:#x}): unsupported chain {chain_id} or unknown order marker",
+                    placement.sender,
+                ),
+            );
+            return Ok(());
+        }
+    };
+
+    // Idempotency: once verified, do not re-check on log re-delivery
+    // (engine restart, reorg replay, supervisor restart).
+    if local_store::get(&format!("observed:{uid_hex}"))?.is_some() {
+        return Ok(());
+    }
+
+    let path = format!("/api/v1/orders/{uid_hex}");
+    match cow_api::request(chain_id, "GET", &path, None) {
+        Ok(_) => {
+            local_store::set(&format!("observed:{uid_hex}"), &[])?;
+            logging::log(
+                logging::Level::Info,
+                &format!(
+                    "ethflow observed {uid_hex} (orderbook indexed, sender={:#x})",
+                    placement.sender,
+                ),
+            );
+        }
+        Err(err) if err.code == 404 => {
+            // Indexer lag is expected immediately after the block lands —
+            // shepherd's WebSocket can deliver the log a few hundred
+            // milliseconds before the orderbook's own indexer commits.
+            // Do not write `observed:` so the next log re-delivery (or a
+            // future block-tick poll) can re-check; log at Info to keep
+            // the soak dashboard quiet on normal lag.
+            logging::log(
+                logging::Level::Info,
+                &format!(
+                    "ethflow not yet indexed {uid_hex} (sender={:#x}); will recheck on re-delivery",
+                    placement.sender,
+                ),
+            );
+        }
+        Err(err) => {
+            logging::log(
+                logging::Level::Warn,
+                &format!(
+                    "ethflow indexer check failed {uid_hex} ({}): {} (sender={:#x})",
+                    err.code, err.message, placement.sender,
+                ),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn compute_uid(chain_id: u64, placement: &DecodedPlacement) -> Option<OrderUid> {
+    let chain = Chain::try_from(chain_id).ok()?;
+    let domain = chain.settlement_domain();
+    let order_data = gpv2_to_order_data(&placement.order)?;
+    Some(order_data.uid(&domain, placement.contract))
+}
+
+/// Lift the on-chain `GPv2OrderData` enum-byte fields into the typed
+/// `OrderData` the UID computation needs. Returns `None` if any of
+/// the enum bytes carries an unrecognised marker (defensive — every
+/// production EthFlow placement uses the canonical markers).
+fn gpv2_to_order_data(gpv2: &GPv2OrderData) -> Option<OrderData> {
+    Some(OrderData {
+        sell_token: gpv2.sellToken,
+        buy_token: gpv2.buyToken,
+        receiver: (gpv2.receiver != Address::ZERO).then_some(gpv2.receiver),
+        sell_amount: gpv2.sellAmount,
+        buy_amount: gpv2.buyAmount,
+        valid_to: gpv2.validTo,
+        app_data: gpv2.appData,
+        fee_amount: gpv2.feeAmount,
+        kind: OrderKind::from_contract_bytes(gpv2.kind)?,
+        partially_fillable: gpv2.partiallyFillable,
+        sell_token_balance: SellTokenSource::from_contract_bytes(gpv2.sellTokenBalance)?,
+        buy_token_balance: BuyTokenDestination::from_contract_bytes(gpv2.buyTokenBalance)?,
+    })
 }
 
 export!(EthFlowWatcher);
@@ -128,10 +227,13 @@ mod tests {
             validTo: 1_700_000_000,
             appData: B256::repeat_byte(0xaa),
             feeAmount: U256::ZERO,
-            kind: B256::repeat_byte(0xbb),
+            // Canonical sell-side / ERC20 markers — cowprotocol exposes
+            // them as B256 associated constants matching the on-chain
+            // `keccak256("sell")` / `keccak256("erc20")` shapes.
+            kind: OrderKind::SELL,
             partiallyFillable: false,
-            sellTokenBalance: B256::repeat_byte(0xcc),
-            buyTokenBalance: B256::repeat_byte(0xdd),
+            sellTokenBalance: SellTokenSource::ERC20,
+            buyTokenBalance: BuyTokenDestination::ERC20,
         }
     }
 
@@ -165,6 +267,8 @@ mod tests {
         (topics, data)
     }
 
+    // ---- decode tests (BLEU-832) ----
+
     #[test]
     fn decodes_well_formed_placement() {
         let (sender, event) = sample_event();
@@ -172,6 +276,7 @@ mod tests {
         let address = ETH_FLOW_PRODUCTION.as_slice();
 
         let decoded = decode_order_placement(address, &topics, &data).expect("decode succeeds");
+        assert_eq!(decoded.contract, ETH_FLOW_PRODUCTION);
         assert_eq!(decoded.sender, sender);
         assert_eq!(decoded.order.sellToken, event.order.sellToken);
         assert_eq!(decoded.order.buyAmount, event.order.buyAmount);
@@ -231,5 +336,51 @@ mod tests {
     fn rejects_empty_topics() {
         let (_, data) = encode_log(&sample_event().1);
         assert!(decode_order_placement(ETH_FLOW_PRODUCTION.as_slice(), &[], &data).is_none());
+    }
+
+    // ---- UID computation (observe path) ----
+
+    /// Sanity check that `compute_uid` produces the canonical 56-byte
+    /// shape `digest || owner || valid_to`. We do not pin the exact UID
+    /// (it depends on `Chain::SEPOLIA::settlement_domain()` and would
+    /// drift if cowprotocol's domain separator changes); instead we
+    /// assert structural invariants the orderbook joins on.
+    #[test]
+    fn compute_uid_pins_owner_to_ethflow_contract_and_validto() {
+        let (_, event) = sample_event();
+        let (topics, data) = encode_log(&event);
+        let decoded =
+            decode_order_placement(ETH_FLOW_PRODUCTION.as_slice(), &topics, &data).unwrap();
+
+        // 11155111 = Sepolia chain ID; supported by cowprotocol::Chain.
+        let uid = compute_uid(11_155_111, &decoded).expect("known chain + markers");
+        let bytes: [u8; 56] = uid.into();
+
+        // owner suffix (bytes 32..52) = EthFlow contract address.
+        assert_eq!(&bytes[32..52], ETH_FLOW_PRODUCTION.as_slice());
+        // valid_to suffix (bytes 52..56) = u32 big-endian of the order's
+        // on-chain validTo. EthFlow uses u32::MAX in production; this
+        // sample uses 1_700_000_000.
+        assert_eq!(
+            u32::from_be_bytes(bytes[52..56].try_into().unwrap()),
+            event.order.validTo,
+        );
+    }
+
+    #[test]
+    fn compute_uid_returns_none_on_unsupported_chain() {
+        let (_, event) = sample_event();
+        let (topics, data) = encode_log(&event);
+        let decoded =
+            decode_order_placement(ETH_FLOW_PRODUCTION.as_slice(), &topics, &data).unwrap();
+        // Chain id 9999 is not in `cowprotocol::Chain`.
+        assert!(compute_uid(9999, &decoded).is_none());
+    }
+
+    #[test]
+    fn gpv2_to_order_data_rejects_unknown_kind_marker() {
+        let mut order = sample_order();
+        order.kind = B256::repeat_byte(0xff);
+        assert!(gpv2_to_order_data(&order).is_none());
     }
 }
