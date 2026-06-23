@@ -20,6 +20,7 @@ use cowprotocol::error::ApiError;
 /// variant is kept so dispatch can grow into it once a server
 /// `Retry-After` hint shows up.
 #[derive(Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum RetryAction {
     /// Leave the watch / placement in place; the next event will
     /// re-attempt.
