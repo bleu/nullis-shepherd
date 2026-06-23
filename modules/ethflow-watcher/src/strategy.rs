@@ -193,6 +193,19 @@ fn observe_placement<H: Host>(
                 ),
             );
         }
+        // `RetryAction` is `#[non_exhaustive]`; treat unknown future
+        // variants like `TryNextBlock` (leave a backoff marker) so
+        // we never silently lose a watch on an SDK bump.
+        _ => {
+            host.set(&format!("backoff:{uid_hex}"), b"")?;
+            host.log(
+                LogLevel::Warn,
+                &format!(
+                    "ethflow backoff (unknown action) {uid_hex} ({}): {}",
+                    err.code, err.message,
+                ),
+            );
+        }
     }
     Ok(())
 }

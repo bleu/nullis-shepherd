@@ -53,27 +53,17 @@ struct BalanceTracker;
 
 impl Guest for BalanceTracker {
     fn init(config: Vec<(String, String)>) -> Result<(), HostError> {
-        match parse_settings(&config) {
-            Ok(s) => {
-                logging::log(
-                    logging::Level::Info,
-                    &format!(
-                        "balance-tracker init: {} addresses, threshold={} wei",
-                        s.addresses.len(),
-                        s.change_threshold,
-                    ),
-                );
-                let _ = SETTINGS.set(s);
-                Ok(())
-            }
-            Err(e) => Err(HostError {
-                domain: "balance-tracker".into(),
-                kind: HostErrorKind::InvalidInput,
-                code: 0,
-                message: format!("balance-tracker: invalid [config]: {e}"),
-                data: None,
-            }),
-        }
+        let s = parse_settings(&config)?;
+        logging::log(
+            logging::Level::Info,
+            &format!(
+                "balance-tracker init: {} addresses, threshold={} wei",
+                s.addresses.len(),
+                s.change_threshold,
+            ),
+        );
+        let _ = SETTINGS.set(s);
+        Ok(())
     }
 
     fn on_event(event: types::Event) -> Result<(), HostError> {
@@ -179,7 +169,7 @@ fn parse_u256_le(bytes: &[u8]) -> Option<U256> {
 }
 
 /// Parse a comma-separated address list, stripping whitespace.
-fn parse_addresses(raw: &str) -> Result<Vec<Address>, String> {
+fn parse_addresses(raw: &str) -> Result<Vec<Address>, HostError> {
     let mut out = Vec::new();
     for (i, part) in raw.split(',').enumerate() {
         let trimmed = part.trim();
@@ -188,34 +178,47 @@ fn parse_addresses(raw: &str) -> Result<Vec<Address>, String> {
         }
         let addr = trimmed
             .parse::<Address>()
-            .map_err(|e| format!("address #{i} ({trimmed:?}): {e}"))?;
+            .map_err(|e| config_err(format!("address #{i} ({trimmed:?}): {e}")))?;
         out.push(addr);
     }
     if out.is_empty() {
-        return Err("expected at least one address".into());
+        return Err(config_err("expected at least one address"));
     }
     Ok(out)
 }
 
-fn parse_settings(entries: &[(String, String)]) -> Result<Settings, String> {
+fn parse_settings(entries: &[(String, String)]) -> Result<Settings, HostError> {
     let addresses_raw = entries
         .iter()
         .find(|(k, _)| k == "addresses")
         .map(|(_, v)| v.as_str())
-        .ok_or_else(|| "missing key \"addresses\"".to_string())?;
+        .ok_or_else(|| config_err("missing key \"addresses\""))?;
     let change_threshold_raw = entries
         .iter()
         .find(|(k, _)| k == "change_threshold")
         .map(|(_, v)| v.as_str())
-        .ok_or_else(|| "missing key \"change_threshold\"".to_string())?;
+        .ok_or_else(|| config_err("missing key \"change_threshold\""))?;
     let addresses = parse_addresses(addresses_raw)?;
     let change_threshold = change_threshold_raw
         .parse::<U256>()
-        .map_err(|e| format!("change_threshold: {e}"))?;
+        .map_err(|e| config_err(format!("change_threshold: {e}")))?;
     Ok(Settings {
         addresses,
         change_threshold,
     })
+}
+
+/// Build the canonical `[config]`-parse `HostError` used by every
+/// site in this module. Mirrors `price-alert`'s `config_err` so the
+/// two example modules stay shaped the same.
+fn config_err(message: impl Into<String>) -> HostError {
+    HostError {
+        domain: "balance-tracker".into(),
+        kind: HostErrorKind::InvalidInput,
+        code: 0,
+        message: format!("balance-tracker: invalid [config]: {}", message.into()),
+        data: None,
+    }
 }
 
 export!(BalanceTracker);
@@ -318,18 +321,15 @@ mod tests {
 
     #[test]
     fn parse_settings_rejects_missing_keys() {
-        assert!(
-            parse_settings(&[("change_threshold".into(), "1".into())])
-                .unwrap_err()
-                .contains("addresses")
-        );
-        assert!(
-            parse_settings(&[(
-                "addresses".into(),
-                "0x70997970C51812dc3A010C7d01b50e0d17dc79C8".into()
-            )])
-            .unwrap_err()
-            .contains("change_threshold")
-        );
+        let err = parse_settings(&[("change_threshold".into(), "1".into())]).unwrap_err();
+        assert!(matches!(err.kind, HostErrorKind::InvalidInput));
+        assert!(err.message.contains("addresses"), "{}", err.message);
+        let err = parse_settings(&[(
+            "addresses".into(),
+            "0x70997970C51812dc3A010C7d01b50e0d17dc79C8".into(),
+        )])
+        .unwrap_err();
+        assert!(matches!(err.kind, HostErrorKind::InvalidInput));
+        assert!(err.message.contains("change_threshold"), "{}", err.message);
     }
 }
