@@ -427,6 +427,5 @@ fn build_alloy_filter(
     Ok(filter)
 }
 
-
 #[cfg(test)]
 mod tests;
