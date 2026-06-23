@@ -4,7 +4,7 @@
 //! keccak256(appDataJSON)`. The orderbook validates submissions by
 //! re-hashing the JSON body and comparing to the signed hash, so any
 //! caller that doesn't already know the document text needs to look
-//! it up — either via IPFS or via the orderbook's mirror at
+//! it up - either via IPFS or via the orderbook's mirror at
 //! `GET /api/v1/app_data/{hex}`.
 //!
 //! This module hides that lookup behind a single
@@ -40,7 +40,7 @@
 //! over a single HTTPS endpoint. Going to IPFS directly would
 //! require a fresh capability (`ipfs`), bigger module footprint,
 //! and worse latency than a single GET against an already-trusted
-//! upstream. If the orderbook 404s, IPFS would too — the doc isn't
+//! upstream. If the orderbook 404s, IPFS would too - the doc isn't
 //! pinned anywhere we can see from inside the engine.
 
 use cowprotocol::EMPTY_APP_DATA_HASH;

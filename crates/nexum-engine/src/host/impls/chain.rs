@@ -61,7 +61,7 @@ impl nexum::host::chain::Host for HostState {
 /// SDK's `shepherd_sdk::chain::decode_revert_hex` can dispatch the
 /// ComposableCoW `PollTryAtBlock` / `PollNever` / `OrderNotValid`
 /// revert envelopes (COW-1082). Without this projection the
-/// classifier is fed `None` and falls back to `TryNextBlock` —
+/// classifier is fed `None` and falls back to `TryNextBlock` -
 /// pruning-efficiency gap, not a correctness gap, but enough to keep
 /// dead TWAP watches polled on every block.
 fn provider_error_to_host_error(err: ProviderError) -> HostError {
@@ -94,9 +94,7 @@ fn provider_error_to_host_error(err: ProviderError) -> HostError {
             // error) for transport-side failures. Out-of-`i32` codes
             // saturate to `-32603` - real-world JSON-RPC codes fit
             // (range `-32768..-32000`).
-            code: code
-                .and_then(|c| i32::try_from(c).ok())
-                .unwrap_or(-32603),
+            code: code.and_then(|c| i32::try_from(c).ok()).unwrap_or(-32603),
             message: source.to_string(),
             data: data.clone(),
         },

@@ -41,7 +41,7 @@ impl ProviderPool {
         for (chain_id, chain_cfg) in &cfg.chains {
             let url = chain_cfg.rpc_url.as_str();
             // The boot log carries the URL with embedded API keys
-            // redacted — log aggregators (Loki, Datadog, splunk) often
+            // redacted - log aggregators (Loki, Datadog, splunk) often
             // ingest these lines and the key shouldn't end up in
             // long-term storage. The engine still uses the full URL
             // when actually connecting to the provider below.
