@@ -54,18 +54,16 @@ impl ProviderPool {
                 ProviderBuilder::new()
                     .connect_ws(WsConnect::new(url))
                     .await
-                    .map_err(|e| ProviderError::Connect {
+                    .map_err(|source| ProviderError::Connect {
                         chain_id: *chain_id,
-                        detail: e.to_string(),
+                        source,
                     })?
                     .erased()
             } else {
-                let parsed: url::Url =
-                    url.parse()
-                        .map_err(|e: url::ParseError| ProviderError::Connect {
-                            chain_id: *chain_id,
-                            detail: e.to_string(),
-                        })?;
+                let parsed: url::Url = url.parse().map_err(|source| ProviderError::ConnectUrl {
+                    chain_id: *chain_id,
+                    source,
+                })?;
                 ProviderBuilder::new().connect_http(parsed).erased()
             };
             providers.insert(*chain_id, provider);
@@ -96,11 +94,11 @@ impl ProviderPool {
         let sub = provider
             .subscribe_blocks()
             .await
-            .map_err(|e| ProviderError::Rpc {
+            .map_err(|source| ProviderError::Rpc {
                 method: "eth_subscribe(newHeads)".into(),
-                detail: e.to_string(),
                 code: None,
                 data: None,
+                source,
             })?;
         let stream = sub.into_stream().map(Ok::<_, ProviderError>);
         Ok(Box::pin(stream))
@@ -119,11 +117,11 @@ impl ProviderPool {
         let sub = provider
             .subscribe_logs(&filter)
             .await
-            .map_err(|e| ProviderError::Rpc {
+            .map_err(|source| ProviderError::Rpc {
                 method: "eth_subscribe(logs)".into(),
-                detail: e.to_string(),
                 code: None,
                 data: None,
+                source,
             })?;
         let stream = sub.into_stream().map(Ok::<_, ProviderError>);
         Ok(Box::pin(stream))
@@ -145,9 +143,9 @@ impl ProviderPool {
         // Pass the params through as a raw JSON value so alloy does
         // not re-encode them on the way to the node.
         let params: Box<RawValue> =
-            RawValue::from_string(params_json).map_err(|e| ProviderError::InvalidParams {
+            RawValue::from_string(params_json).map_err(|source| ProviderError::InvalidParams {
                 method: method.clone(),
-                detail: e.to_string(),
+                source,
             })?;
         // `raw_request` consumes the method name; clone once for the
         // error branch so the success path moves the original string
@@ -157,17 +155,17 @@ impl ProviderPool {
             provider
                 .raw_request(method.into(), params)
                 .await
-                .map_err(|e| {
+                .map_err(|source| {
                     // When the node returns a JSON-RPC error response
-                    // (`{"error": {"code":..., "data":...}}`) — typically
-                    // an `eth_call` revert — capture the structured
+                    // (`{"error": {"code":..., "data":...}}`) - typically
+                    // an `eth_call` revert - capture the structured
                     // payload so the host can forward it to
                     // `HostError.data` (COW-1082). Transport-side
                     // failures (timeouts, serde, etc.) leave both
                     // `code` and `data` `None` so the projection can
                     // tell "no ErrorResp" apart from "ErrorResp with
                     // code = 0".
-                    let (code, data) = match e.as_error_resp() {
+                    let (code, data) = match source.as_error_resp() {
                         Some(payload) => (
                             Some(payload.code),
                             payload.data.as_ref().map(|d| d.get().to_owned()),
@@ -176,9 +174,9 @@ impl ProviderPool {
                     };
                     ProviderError::Rpc {
                         method: method_for_err,
-                        detail: e.to_string(),
                         code,
                         data,
+                        source,
                     }
                 })?;
         Ok(result.get().to_owned())
@@ -197,43 +195,54 @@ pub enum ProviderError {
     #[error("unknown chain {0} (no engine.toml entry)")]
     UnknownChain(u64),
     /// Could not open the underlying transport.
-    #[error("connect chain {chain_id}: {detail}")]
+    #[error("connect chain {chain_id}: {source}")]
     Connect {
         /// Chain id we failed to dial.
         chain_id: u64,
-        /// Transport-side error string.
-        detail: String,
+        /// Transport-side error.
+        #[source]
+        source: alloy_transport::TransportError,
+    },
+    /// HTTP RPC URL did not parse as a [`url::Url`].
+    #[error("connect chain {chain_id}: invalid URL: {source}")]
+    ConnectUrl {
+        /// Chain id whose `rpc_url` was malformed.
+        chain_id: u64,
+        /// Underlying parse failure.
+        #[source]
+        source: url::ParseError,
     },
     /// The guest-supplied JSON params did not parse.
-    #[error("invalid params JSON for `{method}`: {detail}")]
+    #[error("invalid params JSON for `{method}`: {source}")]
     InvalidParams {
         /// RPC method name.
         method: String,
         /// JSON-parser detail.
-        detail: String,
+        #[source]
+        source: serde_json::Error,
     },
     /// The node returned an error for the dispatched call.
     ///
     /// When the underlying alloy `RpcError` carries a JSON-RPC
     /// `ErrorResp` payload (the normal shape for `eth_call` reverts)
     /// the structured `code` and `data` fields are propagated; for
-    /// transport-side failures both are blank (`code = 0`,
-    /// `data = None`).
-    #[error("rpc `{method}` failed: {detail}")]
+    /// transport-side failures both are `None`.
+    #[error("rpc `{method}` failed: {source}")]
     Rpc {
         /// RPC method name.
         method: String,
-        /// Transport-side error string.
-        detail: String,
         /// JSON-RPC error code from `ErrorResp.code`. `None` when
         /// the failure was transport-level (no structured response).
         code: Option<i64>,
-        /// JSON-encoded `ErrorResp.data` payload — for `eth_call`
+        /// JSON-encoded `ErrorResp.data` payload - for `eth_call`
         /// reverts this is the quoted hex string of the abi-encoded
         /// revert body (consumed by `shepherd_sdk::chain::
         /// decode_revert_hex`). `None` when the failure was
         /// transport-level.
         data: Option<String>,
+        /// Transport-side typed error.
+        #[source]
+        source: alloy_transport::TransportError,
     },
 }
 
