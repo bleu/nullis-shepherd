@@ -16,7 +16,7 @@
 //!   `OrderCreation` body. The body is captured for downstream
 //!   validation (Phase 2B / orderbook quote round-trip).
 //! - `RejectedExpected`: the strategy returned without submitting in
-//!   a documented case — e.g. the app_data hash didn't resolve
+//!   a documented case - e.g. the app_data hash didn't resolve
 //!   (COW-1074 path), or dedup already saw the UID.
 //! - `RejectedUnexpected`: the strategy returned without submitting
 //!   in a path we don't recognise; a Linear follow-up should be
@@ -86,8 +86,7 @@ pub fn replay_ethflow(fx: &EthFlowFixture, chain_id: u64) -> ReplayOutcome {
     // valid placement; the replay's job is to verify the strategy
     // assembles a body the orderbook would have accepted, not to
     // re-run the orderbook itself.
-    host.cow_api
-        .respond(Ok(fx.uid.clone()));
+    host.cow_api.respond(Ok(fx.uid.clone()));
 
     // Program the `app_data` resolution path (COW-1074). If the
     // collector captured a resolved document, hand it back verbatim;
@@ -183,7 +182,7 @@ fn classify_ok(host: &MockHost, fx: &EthFlowFixture, log_lines: &[String]) -> Cl
             "app_data hash not mirrored (COW-1074 documented skip path)".into(),
         );
     }
-    // `prior_outcome` short-circuits on Submitted/Dropped — but the
+    // `prior_outcome` short-circuits on Submitted/Dropped - but the
     // MockHost store starts empty per replay so that shouldn't fire.
     // Surface anything else for triage.
     let last_log = log_lines.last().cloned().unwrap_or_default();
