@@ -490,9 +490,11 @@ See doc 07 for the full `chain` and `cow-api` host implementations, method allow
 
 ## Guest-Side (Module Author) Experience
 
-### Universal modules (`nexum-sdk`)
+> The two subsections below describe the **0.3+ macro-driven authoring model** (`#[nexum::module]` / `#[shepherd::module]`, alloy `RootProvider` injection, `TypedState`). It is future direction, not in 0.2 scope. In 0.2, modules ship today using the host-trait seam from [ADR-0009](adr/0009-host-trait-surface.md): a `strategy.rs` (pure logic against `&impl Host`) plus a `lib.rs` `WitBindgenHost` adapter that bridges to `wit-bindgen::generate!`. See [`sdk.md`](sdk.md) and the example modules under `modules/examples/` for the shipped pattern.
 
-Module authors targeting the universal `event-module` world add the `nexum-sdk` crate and use the `#[nexum::module]` proc macro. Modules can access identity for signing operations - either indirectly through `chain` (signing RPC methods are handled transparently) or directly via the `identity` interface for raw signing:
+### Universal modules (future direction; `nexum-sdk`)
+
+In the future direction, module authors targeting the universal `event-module` world would add the `nexum-sdk` crate and use the `#[nexum::module]` proc macro. Modules can access identity for signing operations - either indirectly through `chain` (signing RPC methods are handled transparently) or directly via the `identity` interface for raw signing:
 
 ```rust
 use nexum_sdk::prelude::*;
@@ -516,9 +518,9 @@ impl BlockLogger {
 }
 ```
 
-### CoW Protocol modules (`shepherd-sdk`)
+### CoW Protocol modules (future direction; `shepherd-sdk` macro form)
 
-Module authors targeting the CoW-specific `shepherd` world add the `shepherd-sdk` crate and use the `#[shepherd::module]` proc macro. The macro provides **named event handlers** (`on_block`, `on_logs`, `on_tick`, `on_message`) - it generates the `on_event` match dispatch, WIT export wrapper, and optional provider injection. Handlers can be `async fn` for natural `.await`:
+In the future direction, module authors targeting the CoW-specific `shepherd` world would add the `shepherd-sdk` crate and use the `#[shepherd::module]` proc macro. The macro provides **named event handlers** (`on_block`, `on_logs`, `on_tick`, `on_message`) - it generates the `on_event` match dispatch, WIT export wrapper, and optional provider injection. Handlers can be `async fn` for natural `.await`:
 
 ```rust
 use shepherd_sdk::prelude::*;
