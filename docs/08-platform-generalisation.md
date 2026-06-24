@@ -955,7 +955,7 @@ The content hash is the trust anchor. The transport is interchangeable.
 
 ## SDK Layering
 
-The SDK mirrors the WIT layering:
+The SDK is designed to mirror the WIT layering. **In 0.2, only `shepherd-sdk` (+ `shepherd-sdk-test`) ships; the two-crate split below is future direction, not shipped.** The current shape is the host-trait seam from [ADR-0009](adr/0009-host-trait-surface.md). The diagram below describes the 0.3+ target:
 
 ```mermaid
 graph TD
@@ -970,11 +970,11 @@ graph TD
     ShepherdSDK -->|"extends"| NexumSDK
 ```
 
-- **`nexum-sdk`** - the universal Rust SDK for any module targeting `nexum:host/event-module`. Provides `HostTransport` (alloy `Transport` trait over `chain::request` / `chain::request-batch`), `provider(chain_id)`, `TypedState` (serde over `local-store`), `RemoteStore` (typed wrapper over `remote-store`), `Messaging` (typed wrapper over `messaging`), `Signer` (typed wrapper over `identity`), logging macros, `HostError`/`HostErrorKind`. Any module author - CoW, DeFi, gaming, whatever - uses this.
+- **`nexum-sdk` (future)** - the universal Rust SDK for any module targeting `nexum:host/event-module`. Would provide `HostTransport` (alloy `Transport` trait over `chain::request` / `chain::request-batch`), `provider(chain_id)`, `TypedState` (serde over `local-store`), `RemoteStore` (typed wrapper over `remote-store`), `Messaging` (typed wrapper over `messaging`), `Signer` (typed wrapper over `identity`), logging macros, `HostError`/`HostErrorKind`. Any module author - CoW, DeFi, gaming, whatever - would use this.
 
-- **`shepherd-sdk`** - extends `nexum-sdk` with the typed `Cow` client and the `#[shepherd::module]` proc macro (which generates the `cow-api` import in addition to the universals).
+- **`shepherd-sdk` (shipped; subset)** - in 0.2 ships the host-trait seam (`ChainHost`, `LocalStoreHost`, `CowApiHost`, `LoggingHost`, supertrait `Host`), `HostError` / `HostErrorKind`, and CoW helpers (`PollOutcome`, `RetryAction`, `gpv2_to_order_data`, …). In the 0.3+ target, it would extend `nexum-sdk` with the typed `Cow` client and the `#[shepherd::module]` proc macro.
 
-A module author building a generic blockchain automation module depends only on `nexum-sdk`. A module author building a CoW Protocol module depends on `shepherd-sdk` (which re-exports `nexum-sdk`).
+In the target shape, a module author building a generic blockchain automation module would depend only on `nexum-sdk`; a CoW Protocol module would depend on `shepherd-sdk` (re-exporting `nexum-sdk`). In 0.2, every Rust module depends on `shepherd-sdk` regardless of whether it touches CoW APIs.
 
 For **non-Rust** module authors (JavaScript, Python, Go, C++), the SDK is unnecessary - they use `wit-bindgen` directly against the WIT package for their target world. The WIT is the universal contract; the SDK is a Rust ergonomics layer on top.
 
@@ -1012,8 +1012,8 @@ For the full 0.1 → 0.2 rename and behaviour change list, see the [Migration Gu
 | `app-module` world | Interactive modules - design only; planned hosts |
 | `shepherd:cow` WIT package | CoW Protocol domain extension |
 | `shepherd` world | CoW automation modules (includes event-module + cow-api) |
-| `nexum-sdk` crate | Universal Rust SDK (HostTransport, TypedState, RemoteStore, Messaging, Signer, HostError) |
-| `shepherd-sdk` crate | CoW Rust SDK (Cow, extends nexum-sdk) |
+| `nexum-sdk` crate (future direction) | Universal Rust SDK (HostTransport, TypedState, RemoteStore, Messaging, Signer, HostError) - not in 0.2 |
+| `shepherd-sdk` crate (shipped) | Rust SDK: host-trait seam (ADR-0009), HostError, chain + cow helpers. In 0.3+ target, would re-export `nexum-sdk`. |
 | Content-addressed distribution | Platform-agnostic (Swarm/IPFS, ENS discovery, hash verification) |
 | Host Adapter | Platform-specific implementation of universal interfaces |
 
