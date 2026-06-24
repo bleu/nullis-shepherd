@@ -1,5 +1,5 @@
 //! Markdown report renderer for the backtest run. Modelled on the
-//! COW-1064 E2E report shape — run metadata, per-module counts,
+//! COW-1064 E2E report shape - run metadata, per-module counts,
 //! per-event appendix table, anomalies, sign-off.
 
 use std::collections::BTreeMap;
@@ -32,7 +32,7 @@ pub fn render(fx: &Fixtures, outcomes: &[ReplayOutcome], threshold: f64) -> Stri
     let now = chrono_like_now();
     let mut out = String::new();
     out.push_str(&format!(
-        "# Pre-soak backtest — {}d window on {} ({})\n\n",
+        "# Pre-soak backtest - {}d window on {} ({})\n\n",
         fx.metadata.window_days, fx.metadata.chain_name, now,
     ));
     out.push_str(
@@ -45,14 +45,32 @@ pub fn render(fx: &Fixtures, outcomes: &[ReplayOutcome], threshold: f64) -> Stri
     );
     out.push_str("## Run metadata\n\n");
     out.push_str("| Field | Value |\n|---|---|\n");
-    out.push_str(&format!("| Chain | {} (id={}) |\n", fx.metadata.chain_name, fx.metadata.chain_id));
-    out.push_str(&format!("| Window | {}d ({}..{}) |\n", fx.metadata.window_days, fx.metadata.from_block, fx.metadata.to_block));
-    out.push_str(&format!("| Collected at | {} |\n", fx.metadata.collected_at));
+    out.push_str(&format!(
+        "| Chain | {} (id={}) |\n",
+        fx.metadata.chain_name, fx.metadata.chain_id
+    ));
+    out.push_str(&format!(
+        "| Window | {}d ({}..{}) |\n",
+        fx.metadata.window_days, fx.metadata.from_block, fx.metadata.to_block
+    ));
+    out.push_str(&format!(
+        "| Collected at | {} |\n",
+        fx.metadata.collected_at
+    ));
     out.push_str(&format!("| RPC | `{}` |\n", fx.metadata.rpc_url));
     out.push_str(&format!("| Orderbook | `{}` |\n", fx.metadata.cow_api));
-    out.push_str(&format!("| EthFlow owner | `{}` |\n", fx.metadata.ethflow_owner));
-    out.push_str(&format!("| ComposableCoW | `{}` |\n", fx.metadata.composable_cow));
-    out.push_str(&format!("| Accept threshold | {:.0}% |\n", threshold * 100.0));
+    out.push_str(&format!(
+        "| EthFlow owner | `{}` |\n",
+        fx.metadata.ethflow_owner
+    ));
+    out.push_str(&format!(
+        "| ComposableCoW | `{}` |\n",
+        fx.metadata.composable_cow
+    ));
+    out.push_str(&format!(
+        "| Accept threshold | {:.0}% |\n",
+        threshold * 100.0
+    ));
     out.push('\n');
 
     if !fx.metadata.notes.is_empty() {
@@ -66,10 +84,13 @@ pub fn render(fx: &Fixtures, outcomes: &[ReplayOutcome], threshold: f64) -> Stri
     out.push_str("## EthFlow replay summary\n\n");
     out.push_str(&format!("- Events replayed: **{total}**\n"));
     for (label, count) in &by_class {
-        out.push_str(&format!("- {label}: **{count}** ({:.1}%)\n", *count as f64 / total.max(1) as f64 * 100.0));
+        out.push_str(&format!(
+            "- {label}: **{count}** ({:.1}%)\n",
+            *count as f64 / total.max(1) as f64 * 100.0
+        ));
     }
     out.push_str(&format!(
-        "\nAccepted (Submitted + RejectedExpected): **{accepted}/{total} = {:.1}%** — {} threshold ({:.0}%).\n\n",
+        "\nAccepted (Submitted + RejectedExpected): **{accepted}/{total} = {:.1}%** - {} threshold ({:.0}%).\n\n",
         ratio * 100.0,
         if pass { "PASS vs." } else { "**FAIL** vs." },
         threshold * 100.0,
@@ -115,7 +136,7 @@ pub fn render(fx: &Fixtures, outcomes: &[ReplayOutcome], threshold: f64) -> Stri
     out.push_str(&format!(
         "{} `ConditionalOrderCreated` events were collected in this window. \
          **Replay deferred to Phase 2B** because driving `twap_monitor::strategy::on_block` \
-         requires walking each watch's `eth_call(getTradeableOrderWithSignature)` per-block — \
+         requires walking each watch's `eth_call(getTradeableOrderWithSignature)` per-block - \
          a workload public-tier RPCs refuse (see baseline-latency / COW-1031 finding). The \
          fixtures are committed for the future re-run; the TWAP gap on the sign-off is \
          intentional and tracked separately.\n\n",
@@ -188,7 +209,7 @@ fn chrono_like_now() -> String {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    // YYYY-MM-DDTHH:MM:SSZ — derived without leap-year handling
+    // YYYY-MM-DDTHH:MM:SSZ - derived without leap-year handling
     // because the report only uses this for a header line; the
     // ground truth is the fixtures' `collected_at` field.
     let days = secs / 86400;

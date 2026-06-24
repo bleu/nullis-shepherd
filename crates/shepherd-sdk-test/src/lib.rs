@@ -375,7 +375,7 @@ impl MockCowApi {
 
 impl MockCowApi {
     /// Program a response for a specific `(method, path)` pair.
-    /// Highest priority — used when both this and `respond_to_request`
+    /// Highest priority - used when both this and `respond_to_request`
     /// are set.
     pub fn respond_to_request_for(
         &self,
