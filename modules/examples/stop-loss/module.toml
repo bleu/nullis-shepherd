@@ -1,0 +1,41 @@
+# stop-loss example module: watches a Chainlink oracle and submits a
+# CoW order when the price drops below the configured trigger.
+# Demonstrates eth_call + OrderCreation + cow-api submit + local-store
+# dedup, the full M3 SDK surface.
+
+[module]
+name = "stop-loss"
+version = "0.1.0"
+component = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+[capabilities]
+required = ["logging", "chain", "local-store", "cow-api"]
+optional = []
+
+[capabilities.http]
+allow = []
+
+# --- subscriptions ----------------------------------------------------
+
+[[subscription]]
+kind = "block"
+chain_id = 11155111  # Sepolia
+
+# --- config -----------------------------------------------------------
+
+[config]
+# Chainlink AggregatorV3Interface address (ETH/USD on Sepolia).
+oracle_address = "0x694AA1769357215DE4FAC081bf1f309aDC325306"
+# Oracle's decimals (Chainlink USD pairs are 8).
+decimals = "8"
+# Trigger price in the oracle's native decimal units. Below this, sell.
+trigger_price = "2500.00"
+# Order parameters. The owner pre-signs via GPv2Signing.setPreSignature
+# (on-chain, outside this module); the module submits the body with
+# Signature::PreSign on trigger.
+owner = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+sell_token = "0x6810e776880C02933D47DB1b9fc05908e5386b96"
+buy_token = "0xfff9976782d46cc05630d1f6ebab18b2324d6b14"
+sell_amount_wei = "1000000000000000000"
+buy_amount_wei = "300000000000000000"
+valid_to_seconds = "4294967295"
