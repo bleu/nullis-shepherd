@@ -29,3 +29,14 @@ skills-lock.json
 
 # Engine runtime state (default state_dir from engine.toml).
 data/
+
+# E2E automation: rendered configs with embedded RPC keys + script state
+# never get committed.
+*.local.toml
+scripts/.state
+scripts/.env
+
+# Generated reports under e2e-reports/ (operator commits the filled-in ones
+# manually via `git add -f`).
+docs/operations/e2e-reports/engine-*.log
+docs/operations/e2e-reports/metrics-*.txt

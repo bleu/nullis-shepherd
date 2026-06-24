@@ -65,33 +65,9 @@ Reference implementations: `modules/examples/price-alert/`, `modules/examples/st
 
 ## Consequences
 
-- **Strategy code is testable in native Rust** without `wasm32-wasip2`. Every shepherd-side module ships a unit-test suite that exercises this seam via `MockHost`; CI is the authoritative count.
+- **Strategy code is testable in native Rust** without `wasm32-wasip2`. The 145 host tests across the workspace (twap 20, ethflow 12, balance-tracker 13, price-alert 16, stop-loss 7, shepherd-sdk 27, shepherd-sdk-test 8, nexum-engine 41, plus 1 doctest) all exercise this seam.
 - **The `WitBindgenHost` adapter is duplicated across modules.** ~150 lines of identical glue (the four trait impls plus the two converters and `convert_level`). Acceptable today; the M5 `#[nexum::module]` macro is the path to eliminate it.
 - **`shepherd-sdk-test` does not need wit-bindgen.** It depends only on `shepherd-sdk` and `std`; no wasm toolchain involved. Tests compile and run as plain Rust.
-- **`HostError` round-trips lossily at the WIT boundary.** The wit-bindgen and SDK types have identical fields today; if either evolves (new variant on `HostErrorKind`, new field), modules need a one-line `From` update. ADR-0009 follow-up COW-1029 / BLEU-853 will `#[non_exhaustive]` both enums before any field-add or variant-add lands.
+- **`HostError` round-trips lossily at the WIT boundary.** The wit-bindgen and SDK types have identical fields today; if either evolves (new variant on `HostErrorKind`, new field), modules need a one-line `From` update. **Applied in M4 (COW-1029)**: `HostErrorKind` and `LogLevel` are `#[non_exhaustive]`; each module's `sdk_err_into_wit` and `convert_level` adapter carries a wildcard arm mapping unknown SDK-side variants to `HostErrorKind::Internal` / `Level::Info` respectively. `RetryAction` and `PollOutcome` stay exhaustive (domain-locked to the cow-rs `OrderPostErrorKind::is_retriable` and `IConditionalOrder` Solidity interfaces).
 - **The four-trait split is not an interface contract with mfw78's WIT.** WIT defines the wire shape; the SDK traits are a Rust-side ergonomics layer. The two evolve together but are not the same artifact.
 - **Future capabilities (e.g. `messaging`, `remote-store`, `http`) add new traits.** Each new host interface becomes a new trait + new `MockX` in `shepherd-sdk-test`, and the supertrait `Host` is bumped to bound on the new trait. Modules that do not use the new capability are unaffected (they only need `<H: ChainHost + LocalStoreHost>` etc. on the subset they actually touch - the supertrait is a convenience for full-surface modules, not a hard requirement).
-
-## Capability enforcement vs. the WIT world (load-bearing assumption)
-
-`enforce_capabilities` (in `crates/nexum-engine/src/manifest/capabilities.rs`) checks the loaded component's *actual* import set against the manifest's `[capabilities].required + [capabilities].optional`. A component that imports a `nexum:host/<iface>` or `shepherd:cow/<iface>` whose `<iface>` is a known capability NOT in either list fails to boot with `CapabilityViolation`.
-
-This interacts with `wit_bindgen::generate!` in a way worth pinning here, because the example modules and the production modules use different strategies:
-
-| Module | WIT world | `generate!` mode | Capabilities the manifest declares |
-|---|---|---|---|
-| twap-monitor | `shepherd:cow/shepherd` (supertype) | `generate_all` | logging, local-store, chain, cow-api |
-| ethflow-watcher | `shepherd:cow/shepherd` | `generate_all` | logging, local-store, cow-api (chain optional - PR #55 review) |
-| stop-loss | `shepherd:cow/shepherd` | `generate_all` | logging, local-store, chain, cow-api |
-| price-alert | `shepherd:cow/shepherd` | `generate_all` | logging, local-store, chain (no cow-api) |
-| balance-tracker | `nexum:host/event-module` | `generate_all` | logging, local-store, chain |
-
-`price-alert` and `balance-tracker` compile against worlds that import `shepherd:cow/cow-api`, but their manifests do not declare it. Boot succeeds today because the `wasm-tools` / `wit-component` pipeline elides any WIT import the produced `.wasm` does not actually exercise from the component's import section. `enforce_capabilities` then sees the trimmed set and finds nothing missing.
-
-**The elision is load-bearing**, not a manifest convenience: if a future toolchain bump changes the elision behaviour (or if a module starts importing a capability transitively without declaring it), modules that worked before suddenly fail capability enforcement at boot.
-
-**Mitigation today**: rely on the elision and treat the assumption as part of the supported build pipeline. Both wasm-tools 1.x and wasmtime 41-45 elide unreferenced imports for our build profile; CI exercises this implicitly on every `cargo build --target wasm32-wasip2`.
-
-**Hardening planned for M5** (recorded here, NOT a 0.2 deliverable): generate a per-module world (`shepherd:cow/price-alert`, etc.) that only re-exports the capabilities the module declares. The M5 `#[nexum::module]` macro is the natural place to derive this world from the manifest. Eliminates the elision dependency.
-
-Until then, **a module that adds an import of an undeclared capability will fail capability enforcement at boot**, not at compile time. This is the intended behaviour - the alternative would be to widen the supertype world or to make enforcement lenient, both of which would damage least-privilege.

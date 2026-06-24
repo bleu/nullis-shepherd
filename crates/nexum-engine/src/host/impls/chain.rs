@@ -18,6 +18,7 @@ impl nexum::host::chain::Host for HostState {
     ) -> Result<String, HostError> {
         let start = Instant::now();
         tracing::debug!(chain_id, %method, "chain::request");
+        let method_label = method.clone();
         let result = match self.chain.request(chain_id, method, params).await {
             Ok(body) => Ok(body),
             Err(ProviderError::UnknownChain(id)) => Err(HostError {
@@ -27,23 +28,31 @@ impl nexum::host::chain::Host for HostState {
                 message: format!("chain {id} has no engine.toml RPC entry"),
                 data: None,
             }),
-            Err(ProviderError::InvalidParams { detail, .. }) => Err(HostError {
+            Err(err @ ProviderError::InvalidParams { .. }) => Err(HostError {
                 domain: "chain".into(),
                 kind: HostErrorKind::InvalidInput,
                 code: -32602,
-                message: detail,
+                message: err.to_string(),
                 data: None,
             }),
-            Err(ProviderError::Rpc { detail, .. }) => Err(HostError {
+            Err(err @ ProviderError::Rpc { .. }) => Err(HostError {
                 domain: "chain".into(),
                 kind: HostErrorKind::Internal,
                 code: -32603,
-                message: detail,
+                message: err.to_string(),
                 data: None,
             }),
             Err(err) => Err(internal_error("chain", err.to_string())),
         };
         tracing::trace!(elapsed_ms = ?start.elapsed(), "chain::request done");
+        let outcome = if result.is_ok() { "ok" } else { "err" };
+        metrics::counter!(
+            "shepherd_chain_request_total",
+            "chain_id" => chain_id.to_string(),
+            "method" => method_label,
+            "outcome" => outcome,
+        )
+        .increment(1);
         result
     }
 

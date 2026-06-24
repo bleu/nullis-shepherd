@@ -17,10 +17,3 @@ alloy-primitives = { version = "1.6", default-features = false, features = ["std
 alloy-sol-types = { version = "1.5", default-features = false, features = ["std"] }
 serde_json = { version = "1", default-features = false, features = ["alloc"] }
 thiserror = "2"
-
-[dev-dependencies]
-# Property-based tests over the codec round-trips + validation
-# functions with non-trivial input spaces. The PR #55 review rubric
-# called these out explicitly; example-based coverage stays in place
-# and proptest supplements it.
-proptest = { version = "1", default-features = false, features = ["std"] }

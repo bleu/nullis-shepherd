@@ -30,8 +30,10 @@ build-m2:
 
 # Run nexum-engine wired for the M2 smoke / round-trip scenario
 # (Sepolia, both M2 modules). See `docs/operations/m2-testnet-runbook.md`.
+# --pretty-logs keeps the runbook-friendly human-readable formatter;
+# production deploys omit the flag and emit JSON (COW-1035).
 run-m2: build-m2 build-engine
-    cargo run -p nexum-engine -- --engine-config engine.m2.toml
+    cargo run -p nexum-engine -- --engine-config engine.m2.toml --pretty-logs
 
 # Build the M3 example modules (price-alert + balance-tracker + stop-loss)
 # for wasm32-wasip2.
@@ -42,8 +44,22 @@ build-m3:
 
 # Run nexum-engine wired for the M3 smoke / validation scenario
 # (Sepolia, 3 example modules). See `docs/operations/m3-testnet-runbook.md`.
+# --pretty-logs keeps the runbook-friendly human-readable formatter;
+# production deploys omit the flag and emit JSON (COW-1035).
 run-m3: build-m3 build-engine
-    cargo run -p nexum-engine -- --engine-config engine.m3.toml
+    cargo run -p nexum-engine -- --engine-config engine.m3.toml --pretty-logs
+
+# Build all 5 modules required by the E2E run (twap-monitor +
+# ethflow-watcher + price-alert + balance-tracker + stop-loss).
+build-e2e: build-m2 build-m3
+
+# Run the 4-6 h E2E integration scenario on Sepolia. All 5 modules
+# dispatched simultaneously against a live RPC; metrics scraped at
+# 127.0.0.1:9100/metrics. JSON logs (no --pretty-logs) so a
+# downstream `jq` filter can mine submitted/dropped/backoff markers
+# for the e2e report. See `docs/operations/e2e-testnet-runbook.md`.
+run-e2e: build-e2e build-engine
+    cargo run -p nexum-engine -- --engine-config engine.e2e.toml
 
 # Check the entire workspace
 check:
