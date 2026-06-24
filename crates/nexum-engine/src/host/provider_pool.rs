@@ -42,7 +42,7 @@ impl ProviderPool {
         for (chain_id, chain_cfg) in &cfg.chains {
             let url = chain_cfg.rpc_url.as_str();
             // The boot log carries the URL with embedded API keys
-            // redacted — log aggregators (Loki, Datadog, splunk) often
+            // redacted - log aggregators (Loki, Datadog, splunk) often
             // ingest these lines and the key shouldn't end up in
             // long-term storage. The engine still uses the full URL
             // when actually connecting to the provider below.
@@ -95,11 +95,11 @@ impl ProviderPool {
         let sub = provider
             .subscribe_blocks()
             .await
-            .map_err(|e| ProviderError::Rpc {
+            .map_err(|source| ProviderError::Rpc {
                 method: "eth_subscribe(newHeads)".into(),
-                detail: e.to_string(),
                 code: None,
                 data: None,
+                source,
             })?;
         let stream = sub.into_stream().map(Ok::<_, ProviderError>);
         Ok(Box::pin(stream))
@@ -118,11 +118,11 @@ impl ProviderPool {
         let sub = provider
             .subscribe_logs(&filter)
             .await
-            .map_err(|e| ProviderError::Rpc {
+            .map_err(|source| ProviderError::Rpc {
                 method: "eth_subscribe(logs)".into(),
-                detail: e.to_string(),
                 code: None,
                 data: None,
+                source,
             })?;
         let stream = sub.into_stream().map(Ok::<_, ProviderError>);
         Ok(Box::pin(stream))
@@ -156,17 +156,17 @@ impl ProviderPool {
             provider
                 .raw_request(method.into(), params)
                 .await
-                .map_err(|e| {
+                .map_err(|source| {
                     // When the node returns a JSON-RPC error response
-                    // (`{"error": {"code":..., "data":...}}`) — typically
-                    // an `eth_call` revert — capture the structured
+                    // (`{"error": {"code":..., "data":...}}`) - typically
+                    // an `eth_call` revert - capture the structured
                     // payload so the host can forward it to
                     // `HostError.data` (COW-1082). Transport-side
                     // failures (timeouts, serde, etc.) leave both
                     // `code` and `data` `None` so the projection can
                     // tell "no ErrorResp" apart from "ErrorResp with
                     // code = 0".
-                    let (code, data) = match e.as_error_resp() {
+                    let (code, data) = match source.as_error_resp() {
                         Some(payload) => (
                             Some(payload.code),
                             payload.data.as_ref().map(|d| d.get().to_owned()),
@@ -175,9 +175,9 @@ impl ProviderPool {
                     };
                     ProviderError::Rpc {
                         method: method_for_err,
-                        detail: e.to_string(),
                         code,
                         data,
+                        source,
                     }
                 })?;
         Ok(result.get().to_owned())
@@ -233,23 +233,23 @@ pub enum ProviderError {
     /// When the underlying alloy `RpcError` carries a JSON-RPC
     /// `ErrorResp` payload (the normal shape for `eth_call` reverts)
     /// the structured `code` and `data` fields are propagated; for
-    /// transport-side failures both are blank (`code = None`,
-    /// `data = None`).
-    #[error("rpc `{method}` failed: {detail}")]
+    /// transport-side failures both are `None`.
+    #[error("rpc `{method}` failed: {source}")]
     Rpc {
         /// RPC method name.
         method: String,
-        /// Transport-side error string.
-        detail: String,
         /// JSON-RPC error code from `ErrorResp.code`. `None` when
         /// the failure was transport-level (no structured response).
         code: Option<i64>,
-        /// JSON-encoded `ErrorResp.data` payload — for `eth_call`
+        /// JSON-encoded `ErrorResp.data` payload - for `eth_call`
         /// reverts this is the quoted hex string of the abi-encoded
         /// revert body (consumed by `shepherd_sdk::chain::
         /// decode_revert_hex`). `None` when the failure was
         /// transport-level.
         data: Option<String>,
+        /// Transport-side typed error.
+        #[source]
+        source: alloy_transport::TransportError,
     },
 }
 
