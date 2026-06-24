@@ -1,0 +1,39 @@
+# ethflow-watcher: see `CoWSwapEthFlow.OrderPlacement`, lift the embedded
+# `GPv2OrderData` into an `OrderCreation`, and submit it via the CoW
+# Protocol orderbook with the EIP-1271 signing scheme.
+
+[module]
+name = "ethflow-watcher"
+version = "0.1.0"
+# Placeholder content hash. 0.2 parses but does not verify this; 0.3 will
+# compare it against the sha256 of the loaded component bytes.
+component = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+[capabilities]
+# Least-privilege: the module exercises logging, local-store and
+# cow-api today; `chain` is listed as optional so a follow-up (e.g.
+# BLEU-855 adding an eth_call to read the EthFlow refund pointer)
+# can use it without manifest churn, without widening the required
+# grant for a capability the module does not call yet.
+required = ["logging", "local-store", "cow-api"]
+optional = ["chain"]
+
+[capabilities.http]
+# All outbound HTTP goes through `cow-api`; no direct `http` calls.
+allow = []
+
+# --- subscriptions ------------------------------------------------------
+
+# CoWSwapEthFlow.OrderPlacement on Sepolia. topic-0 = keccak256(
+# "OrderPlacement(address,(address,address,address,uint256,uint256,uint32,
+#  bytes32,uint256,bytes32,bool,bytes32,bytes32),(uint8,bytes),bytes)").
+# `address` is the Sepolia ETH_FLOW_PRODUCTION deployment from
+# `cowprotocol/ethflowcontract/networks.prod.json`. Unlike
+# ComposableCoW's CREATE2 address, EthFlow has had multiple per-network
+# and per-version deployments; M5 multi-chain config MUST re-check the
+# address per `chain_id` instead of assuming this value carries.
+[[subscription]]
+kind = "log"
+chain_id = 11155111
+address = "0xbA3cB449bD2B4ADddBc894D8697F5170800EAdeC"
+event_signature = "0xcf5f9de2984132265203b5c335b25727702ca77262ff622e136baa7362bf1da9"

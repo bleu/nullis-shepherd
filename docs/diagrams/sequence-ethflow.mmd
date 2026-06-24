@@ -1,0 +1,39 @@
+sequenceDiagram
+    autonumber
+    actor User as User<br/>(wallet)
+    participant Contract as CoWSwapEthFlow<br/>(on-chain)
+    participant RPC as Chain RPC<br/>(WSS)
+    participant EL as nexum-engine<br/>Event Loop
+    participant Mod as ethflow-watcher<br/>(WASM module)
+    participant SolDec as alloy_sol_types<br/>(in module)
+    participant Cow as cowprotocol crate<br/>(in module, wasm32)
+    participant Host as HostState
+    participant OB as CoW Orderbook
+
+    User->>Contract: createOrder(order, msg.value=ETH)
+    Contract->>Contract: store orders[hash] = onchainData,<br/>emit OrderPlacement
+    Contract-->>RPC: log emitted on block N
+
+    RPC-->>EL: eth_subscribe logs delivery
+    EL->>Mod: on_event(LogEvent)
+
+    Mod->>SolDec: decode OrderPlacement(sender, order, sig, data)
+    SolDec-->>Mod: (sender, GPv2OrderData, EIP1271-sig, data)
+
+    Mod->>Cow: build OrderCreation with EIP-1271 scheme<br/>pointing at CoWSwapEthFlow contract
+    Cow-->>Mod: OrderCreation + OrderUid
+
+    Mod->>Host: cow-api.submit-order(chain_id, order_json)
+    Host->>OB: POST /api/v1/orders
+    OB-->>Host: result
+
+    alt 200 OK with OrderUid
+        Host-->>Mod: Ok(OrderUid)
+        Mod->>Host: local-store.set("submitted:{uid}", ...)
+    else 4xx with error code
+        Host-->>Mod: Err(host-error with code)
+        Mod->>Cow: OrderPostError::try_from(host-error).retry_hint()
+        Cow-->>Mod: RetryHint variant
+    end
+
+    Note over Mod: Module applies RetryHint:<br/>TryNextBlock - log + skip<br/>BackoffSeconds(s) - persist next_attempt = now + s<br/>Drop - permanent failure, do not retry

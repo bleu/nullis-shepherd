@@ -46,9 +46,70 @@ just build
 
 # Run the runtime against the example module
 just run
+
+# Run unit tests
+just test
 ```
 
 Without Nix, you need: Rust (edition 2024, see `rust-toolchain.toml` if present), the `wasm32-wasip2` target, and `wasm-tools`.
+
+## Running
+
+### Single-module (development)
+
+```sh
+nexum-engine <path-to-component.wasm> [<module.toml>]
+```
+
+The `module.toml` is optional; without it the engine prints a deprecation warning and loads the module with empty capabilities and config (0.1 fallback).
+
+### Multi-module (production)
+
+```sh
+nexum-engine --engine-config engine.toml
+```
+
+`engine.toml` declares RPC endpoints, the state directory, and a `[[modules]]` list:
+
+```toml
+[engine]
+state_dir = "/var/lib/shepherd"
+log_level  = "info"
+
+[chains.1]
+rpc_url = "wss://mainnet.infura.io/ws/v3/..."
+
+[[modules]]
+path     = "modules/twap-monitor/twap-monitor.wasm"
+manifest = "modules/twap-monitor/module.toml"
+
+[[modules]]
+path = "modules/ethflow-watcher/ethflow-watcher.wasm"
+```
+
+### Module manifest (`module.toml`)
+
+```toml
+[module]
+name    = "twap-monitor"
+version = "0.1.0"
+
+[capabilities]
+required = ["chain", "local-store", "cow-api"]
+optional = ["http"]
+
+[capabilities.http]
+allow = ["api.cow.fi"]
+
+[[subscription]]
+kind     = "log"
+chain_id = 1
+address  = "0xfdaFc9d1902f4e0b84f65F49f244b32b31013b74"  # ComposableCoW (canonical CREATE2 address, same on every supported chain)
+
+[[subscription]]
+kind     = "block"
+chain_id = 1
+```
 
 ## Documentation
 

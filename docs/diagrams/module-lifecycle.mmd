@@ -1,0 +1,39 @@
+stateDiagram-v2
+    direction LR
+
+    [*] --> Resolve
+
+    Resolve --> Load: bundle fetched OK
+    Resolve --> Dead: resolution failed permanently
+
+    Load --> Init: wasmtime compile and instantiate OK
+    Load --> Restart: compile or instantiate failed
+
+    Init --> Run: init(config) returned Ok
+    Init --> Restart: init returned Err or trapped
+
+    Run --> Run: on_event handled OK
+    Run --> Restart: on_event trapped or returned Err or fuel exhausted
+
+    Restart --> Init: backoff expired (1s, 2s, 4s, up to 5min cap)
+    Restart --> Dead: max_consecutive_failures reached (default 10)
+
+    Dead --> Init: operator action (nexum module restart or reload)
+    Dead --> [*]: operator removes module
+
+    note right of Restart
+        Exponential backoff with jitter.
+        Memory zeroed, local-store survives.
+        InstancePre reused, no recompile.
+    end note
+
+    note right of Dead
+        Module excluded from dispatch.
+        Engine continues running other modules.
+        Manual intervention required to resume.
+    end note
+
+    note right of Init
+        Runs inside an implicit write txn.
+        Ok commits, Err rolls back.
+    end note
