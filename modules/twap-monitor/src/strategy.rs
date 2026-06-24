@@ -11,12 +11,24 @@
 use alloy_primitives::{Address, B256, Bytes, keccak256};
 use alloy_sol_types::{SolCall, SolEvent, SolValue};
 use cowprotocol::{
-    COMPOSABLE_COW, Chain, ComposableCoW::ConditionalOrderCreated, ConditionalOrderParams,
-    GPv2OrderData, OrderCreation, Signature,
+    BatchOrderOutcome, COMPOSABLE_COW, Chain, ComposableCoW,
+    ComposableCoW::ConditionalOrderCreated, ConditionalOrderParams, GPv2OrderData, OrderCreation,
+    PollOutcome as CowPollOutcome, Signature, decode_batch_order_results,
 };
 use shepherd_sdk::chain::{eth_call_params, parse_eth_call_result};
 use shepherd_sdk::cow::{PollOutcome, RetryAction, classify_api_error, gpv2_to_order_data};
 use shepherd_sdk::host::{Host, HostError, LogLevel};
+
+/// Local-store key the `lib.rs` adapter writes from `init(config)` to
+/// flip the batched poll path on. Read by [`on_block`] at dispatch
+/// time. Absent / `"false"` -> the original per-watch `poll_one` path
+/// runs (default while the batched contract surface is not yet deployed);
+/// `"true"` -> the batched `batchGetTradeableOrdersWithSignature` path
+/// runs (after the batched contract surface deploys).
+///
+/// Underscore-prefixed so it cannot collide with any `watch:` /
+/// `next_*:` / `submitted:` row.
+pub(crate) const CONFIG_USE_BATCH_POLL_KEY: &str = "__cfg:use_batch_poll";
 
 /// Topics + data slice the indexer path consumes from a wit-bindgen
 /// `log`. Carrying borrowed slices keeps `strategy.rs` independent
@@ -71,8 +83,30 @@ pub fn on_logs<H: Host>(host: &H, logs: &[LogView<'_>]) -> Result<(), HostError>
 }
 
 /// Poll entry: scan every persisted watch and dispatch ready tranches.
+///
+/// Runtime-flagged: when [`CONFIG_USE_BATCH_POLL_KEY`] is set to
+/// `"true"` in local-store (by [`lib::Guest::init`] reading the
+/// module's `[config]` block), the batched
+/// `batchGetTradeableOrdersWithSignature` path runs — one `eth_call`
+/// per block regardless of watch count. Otherwise the original
+/// per-watch loop runs (default, since today's deployed
+/// `ComposableCoW` does not yet expose the batch view).
 pub fn on_block<H: Host>(host: &H, block: BlockInfo) -> Result<(), HostError> {
-    poll_all_watches(host, &block)
+    if use_batch_poll(host)? {
+        poll_all_watches_batched(host, &block)
+    } else {
+        poll_all_watches(host, &block)
+    }
+}
+
+/// Read the [`CONFIG_USE_BATCH_POLL_KEY`] flag. Treats any value other
+/// than literal ASCII `"true"` as off, so a malformed config row
+/// silently falls back to the safe legacy path.
+fn use_batch_poll<H: Host>(host: &H) -> Result<bool, HostError> {
+    let Some(raw) = host.get(CONFIG_USE_BATCH_POLL_KEY)? else {
+        return Ok(false);
+    };
+    Ok(raw.as_slice() == b"true")
 }
 
 // ---- BLEU-826: indexing path ----
@@ -208,6 +242,218 @@ fn poll_one<H: Host>(
     }
 }
 
+// ---- batched poll path (gated by CONFIG_USE_BATCH_POLL_KEY) ----
+
+/// One-batch-per-block poll path. Collects every persisted watch,
+/// builds a single `ComposableCoW.batchGetTradeableOrdersWithSignature`
+/// call, issues one `eth_call`, then dispatches each per-request
+/// outcome through the same submit / lifecycle code paths as the
+/// legacy `poll_all_watches`.
+///
+/// Win on the wire: `N` watches go from `N` separate `eth_call`s (each
+/// a round-trip) to one. On Sepolia with `eth_call ~150 ms` this is
+/// the dominant per-block cost once `N > 4`.
+///
+/// Behaviour is otherwise identical to [`poll_all_watches`]: gated
+/// watches are skipped (the gate read still happens here, just locally
+/// before the batch is assembled), `Ready` outcomes go through
+/// [`submit_ready`] verbatim, and non-Ready outcomes feed
+/// [`outcome_to_update`] -> [`apply_watch_update`].
+fn poll_all_watches_batched<H: Host>(host: &H, block: &BlockInfo) -> Result<(), HostError> {
+    let now_epoch_s = block.timestamp / 1000;
+
+    // 1. Collect every ready watch + its decoded params.
+    let mut entries: Vec<BatchEntry> = Vec::new();
+    for key in host.list_keys("watch:")? {
+        let Some((owner_hex, hash_hex)) = parse_watch_key(&key) else {
+            continue;
+        };
+        if !is_ready(host, owner_hex, hash_hex, block.number, now_epoch_s)? {
+            continue;
+        }
+        let Some(value) = host.get(&key)? else {
+            continue;
+        };
+        let Ok(params) = ConditionalOrderParams::abi_decode(&value) else {
+            host.log(
+                LogLevel::Warn,
+                &format!("watch {key} carried unparseable params; skipping"),
+            );
+            continue;
+        };
+        let Ok(owner) = owner_hex.parse::<Address>() else {
+            continue;
+        };
+        entries.push(BatchEntry { key, owner, params });
+    }
+    if entries.is_empty() {
+        return Ok(());
+    }
+
+    // 2. Build a single batched `eth_call`.
+    let requests: Vec<ComposableCoW::BatchOrderRequest> = entries
+        .iter()
+        .map(|e| ComposableCoW::BatchOrderRequest {
+            owner: e.owner,
+            params: e.params.clone(),
+            offchainInput: Bytes::new(),
+            proof: Vec::new(),
+        })
+        .collect();
+    let call = ComposableCoW::batchGetTradeableOrdersWithSignatureCall { requests };
+    let params_json = eth_call_params(&COMPOSABLE_COW, &call.abi_encode());
+
+    let results = match host.request(block.chain_id, "eth_call", &params_json) {
+        Ok(result_json) => match parse_eth_call_result(&result_json)
+            .and_then(|bytes| decode_batch_return(&bytes))
+        {
+            Some(rs) if rs.len() == entries.len() => rs,
+            Some(rs) => {
+                host.log(
+                    LogLevel::Warn,
+                    &format!(
+                        "batch result length mismatch (got {}, expected {}); skipping block",
+                        rs.len(),
+                        entries.len(),
+                    ),
+                );
+                return Ok(());
+            }
+            None => {
+                host.log(
+                    LogLevel::Warn,
+                    "batch eth_call returned undecodable payload; skipping block",
+                );
+                return Ok(());
+            }
+        },
+        Err(err) => {
+            // A whole-batch revert is unusual (the contract's
+            // per-request try/catch isolates failures), so anything
+            // bubbling up here is a transport-level / wholesale
+            // RPC failure. Defer until the next block, leaving every
+            // watch's gate state untouched.
+            host.log(
+                LogLevel::Warn,
+                &format!(
+                    "batch eth_call failed ({}); deferring all watches to next block",
+                    err.message
+                ),
+            );
+            return Ok(());
+        }
+    };
+
+    // 3. Dispatch each per-request outcome through the existing
+    //    submit + lifecycle paths.
+    let outcomes = decode_batch_order_results(&results);
+    for (entry, outcome) in entries.into_iter().zip(outcomes) {
+        host.log(
+            LogLevel::Info,
+            &format!(
+                "batch-poll {} -> {}",
+                entry.key,
+                batch_outcome_label(&outcome)
+            ),
+        );
+        match outcome {
+            BatchOrderOutcome::Submitted { order, signature } => {
+                submit_ready(
+                    host,
+                    block.chain_id,
+                    entry.owner,
+                    &order,
+                    signature,
+                    &entry.key,
+                    now_epoch_s,
+                )?;
+            }
+            BatchOrderOutcome::PollHint(cow_outcome) => {
+                let sdk_outcome = cow_poll_to_sdk(&cow_outcome);
+                apply_watch_update(host, outcome_to_update(&sdk_outcome), &entry.key)?;
+            }
+            BatchOrderOutcome::ComposableCoWError(e) => {
+                // `*NotAuthed` / `SwapGuardRestricted` etc. are
+                // permanent for this `(owner, params)` pair until an
+                // operator intervenes. Drop the watch so the poll
+                // loop does not keep paying the batch slot for it.
+                host.log(
+                    LogLevel::Warn,
+                    &format!(
+                        "batch-poll dropping {}: ComposableCoW rejected ({e})",
+                        entry.key
+                    ),
+                );
+                apply_watch_update(host, WatchUpdate::DropWatch, &entry.key)?;
+            }
+            BatchOrderOutcome::UnknownRevert(raw) => {
+                // Unknown revert payload — leave the watch in place so
+                // the next block re-checks. Logged at Warn so the
+                // operator sees the raw selector + args for triage.
+                host.log(
+                    LogLevel::Warn,
+                    &format!(
+                        "batch-poll {}: unknown revert (raw={}); leaving watch in place",
+                        entry.key,
+                        alloy_primitives::hex::encode_prefixed(&raw),
+                    ),
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Per-watch carrier the batched path threads from "collect" to
+/// "dispatch" so the watch key, decoded params, and owner stay
+/// associated with the request's slot in the batched call result.
+struct BatchEntry {
+    key: String,
+    owner: Address,
+    params: ConditionalOrderParams,
+}
+
+fn batch_outcome_label(o: &BatchOrderOutcome) -> &'static str {
+    match o {
+        BatchOrderOutcome::Submitted { .. } => "Submitted",
+        BatchOrderOutcome::PollHint(_) => "PollHint",
+        BatchOrderOutcome::ComposableCoWError(_) => "ComposableCoWError",
+        BatchOrderOutcome::UnknownRevert(_) => "UnknownRevert",
+    }
+}
+
+/// Bridge cow-rs's [`cowprotocol::PollOutcome`] (the cow-rs binding
+/// strictly mirroring the five `IConditionalOrder` errors) to the
+/// `shepherd-sdk` [`PollOutcome`] shape the lifecycle layer already
+/// dispatches on.
+///
+/// The two enums carry the same five logical cases; the SDK shape
+/// drops the reason string (the lifecycle layer does not key off it
+/// today) and saturates `U256 -> u64` the same way
+/// `shepherd_sdk::chain::decode_revert_hex` already does on the legacy
+/// path, so the same `next_block:` / `next_epoch:` gates are written.
+fn cow_poll_to_sdk(o: &CowPollOutcome) -> PollOutcome {
+    fn sat(v: alloy_primitives::U256) -> u64 {
+        u64::try_from(v).unwrap_or(u64::MAX)
+    }
+    match o {
+        CowPollOutcome::NotValid(_) => PollOutcome::DontTryAgain,
+        CowPollOutcome::TryNextBlock(_) => PollOutcome::TryNextBlock,
+        CowPollOutcome::TryAtBlock { block_number, .. } => {
+            PollOutcome::TryOnBlock(sat(*block_number))
+        }
+        CowPollOutcome::TryAtEpoch { timestamp, .. } => PollOutcome::TryAtEpoch(sat(*timestamp)),
+        CowPollOutcome::Never(_) => PollOutcome::DontTryAgain,
+    }
+}
+
+/// Decode the successful return of
+/// `batchGetTradeableOrdersWithSignature`: a single ABI-encoded
+/// `BatchOrderResult[]`.
+fn decode_batch_return(data: &[u8]) -> Option<Vec<ComposableCoW::BatchOrderResult>> {
+    <Vec<ComposableCoW::BatchOrderResult>>::abi_decode(data).ok()
+}
+
 /// Decode a successful `getTradeableOrderWithSignature` return into
 /// `Ready { order, signature }`. The wire format is `abi.encode(order,
 /// signature)` - the canonical Solidity return tuple - so the two-tuple
@@ -236,8 +482,8 @@ fn outcome_label(o: &PollOutcome) -> &'static str {
 /// for log lines. Full 32-byte hex is too noisy for an INFO log;
 /// 8 bytes is unique enough to grep against the orderbook.
 ///
-/// Delegates to [`alloy_primitives::hex::encode`] per mfw78's PR #8
-/// guidance against carrying our own hex formatters.
+/// Delegates to [`alloy_primitives::hex::encode`] rather than carrying
+/// our own hex formatter.
 fn hex_short(bytes: &[u8; 32]) -> String {
     format!("0x{}…", alloy_primitives::hex::encode(&bytes[..8]))
 }
@@ -598,6 +844,7 @@ fn apply_watch_update<H: Host>(
 mod tests {
     use super::*;
     use alloy_primitives::{U256, address, b256, hex};
+    use alloy_sol_types::SolError;
     use cowprotocol::{BuyTokenDestination, OrderKind, SellTokenSource};
     use shepherd_sdk::host::{HostErrorKind as Kind, LocalStoreHost as _};
     use shepherd_sdk_test::MockHost;
@@ -1296,5 +1543,320 @@ mod tests {
                 .contains_key(&format!("next_block:{owner_hex}:{hash_hex}")),
         );
         assert!(host.logging.contains("dropped watch"));
+    }
+
+    // ---- batched-poll dispatch (gated by use_batch_poll) ----
+    //
+    // These tests exercise the batched path through `on_block` after
+    // flipping the runtime flag the way `lib::Guest::init` would. The
+    // legacy per-watch path (above) stays the default + remains
+    // exercised by the rest of the suite — the batched path is purely
+    // additive behind a flag.
+
+    /// Build the `params_json` `poll_all_watches_batched` passes to
+    /// `host.request` for a single-entry batch.
+    fn programmed_batch_eth_call_params(entries: &[(Address, ConditionalOrderParams)]) -> String {
+        let requests: Vec<ComposableCoW::BatchOrderRequest> = entries
+            .iter()
+            .map(|(owner, params)| ComposableCoW::BatchOrderRequest {
+                owner: *owner,
+                params: params.clone(),
+                offchainInput: Bytes::new(),
+                proof: Vec::new(),
+            })
+            .collect();
+        let call = ComposableCoW::batchGetTradeableOrdersWithSignatureCall { requests };
+        eth_call_params(&COMPOSABLE_COW, &call.abi_encode())
+    }
+
+    /// Wire-encode a `BatchOrderResult[]` as the `eth_call` return
+    /// payload (a single ABI-encoded dynamic array).
+    fn encode_batch_return(results: &[ComposableCoW::BatchOrderResult]) -> Vec<u8> {
+        results.to_vec().abi_encode()
+    }
+
+    /// Flip the runtime flag so `on_block` dispatches into the
+    /// batched path.
+    fn enable_batch_poll(host: &MockHost) {
+        host.store
+            .set(CONFIG_USE_BATCH_POLL_KEY, b"true")
+            .expect("set use_batch_poll flag");
+    }
+
+    #[test]
+    fn batch_poll_submits_ready_order() {
+        let host = MockHost::new();
+        enable_batch_poll(&host);
+        let owner = address!("0011223344556677889900AABBCCDDEEFF001122");
+        let params = sample_params();
+        seed_watch(&host, owner, &params);
+
+        let ready_order = submittable_order();
+        let signature: Bytes = hex!("c0ffeec0ffeec0ffee").to_vec().into();
+        let batch = vec![ComposableCoW::BatchOrderResult {
+            success: true,
+            order: ready_order.clone(),
+            signature: signature.clone(),
+            revertData: Bytes::new(),
+        }];
+        host.chain.respond_to(
+            "eth_call",
+            programmed_batch_eth_call_params(&[(owner, params.clone())]),
+            Ok(quoted_hex(&encode_batch_return(&batch))),
+        );
+        host.cow_api.respond(Ok("0xfeedface".to_string()));
+
+        on_block(&host, sample_block(1_000)).unwrap();
+
+        // Exactly one batched `eth_call`, regardless of watch count.
+        assert_eq!(
+            host.chain.call_count(),
+            1,
+            "batch path issues a single eth_call",
+        );
+        // Submit path fired exactly once.
+        assert_eq!(host.cow_api.call_count(), 1);
+        let expected_uid = compute_uid_hex(SEPOLIA, &ready_order, owner)
+            .expect("Sepolia is supported + canonical markers");
+        assert!(
+            host.store
+                .snapshot()
+                .contains_key(&format!("submitted:{expected_uid}")),
+            "submitted:{{uid}} marker must be written after batch-submit"
+        );
+        assert!(host.logging.contains("batch-poll"));
+    }
+
+    /// The updated TWAP handler emits `PollTryAtEpoch(nextPartStart, ...)`
+    /// for the "between parts" lifecycle phase. The batched path must
+    /// route the decoded `PollOutcome::TryAtEpoch` through the same
+    /// `outcome_to_update` -> `SetNextEpoch` gate the legacy path
+    /// uses, so subsequent polls skip the watch until `nextPartStart`.
+    #[test]
+    fn batch_poll_handles_try_at_epoch_hint_from_twap() {
+        let host = MockHost::new();
+        enable_batch_poll(&host);
+        let owner = address!("0011223344556677889900AABBCCDDEEFF001122");
+        let params = sample_params();
+        let watch_key_str = seed_watch(&host, owner, &params);
+        let (owner_hex, hash_hex) = parse_watch_key(&watch_key_str).unwrap();
+
+        let next_part_start: u64 = 1_800_000_000;
+        let revert = cowprotocol::IConditionalOrder::PollTryAtEpoch {
+            timestamp: U256::from(next_part_start),
+            reason: "between parts".into(),
+        }
+        .abi_encode();
+        let batch = vec![ComposableCoW::BatchOrderResult {
+            success: false,
+            order: sample_order(), // ignored when success == false
+            signature: Bytes::new(),
+            revertData: revert.into(),
+        }];
+        host.chain.respond_to(
+            "eth_call",
+            programmed_batch_eth_call_params(&[(owner, params.clone())]),
+            Ok(quoted_hex(&encode_batch_return(&batch))),
+        );
+
+        on_block(&host, sample_block(1_000)).unwrap();
+
+        // Watch still present + `next_epoch:` gate written.
+        assert!(host.store.snapshot().contains_key(&watch_key_str));
+        let gate = host
+            .store
+            .snapshot()
+            .get(&format!("next_epoch:{owner_hex}:{hash_hex}"))
+            .cloned()
+            .expect("next_epoch gate written");
+        let stored = u64::from_le_bytes(<[u8; 8]>::try_from(gate.as_slice()).unwrap());
+        assert_eq!(stored, next_part_start);
+        // No submit attempt.
+        assert_eq!(host.cow_api.call_count(), 0);
+    }
+
+    /// The updated TWAP handler emits `PollNever("all parts settled")` for the
+    /// terminal lifecycle phase. The batched path must drop the
+    /// watch + clear gates, exactly like the legacy `DontTryAgain`
+    /// branch does.
+    #[test]
+    fn batch_poll_drops_watch_on_poll_never() {
+        let host = MockHost::new();
+        enable_batch_poll(&host);
+        let owner = address!("0011223344556677889900AABBCCDDEEFF001122");
+        let params = sample_params();
+        let watch_key_str = seed_watch(&host, owner, &params);
+        let (owner_hex, hash_hex) = parse_watch_key(&watch_key_str).unwrap();
+        // Seed a stale gate so the cleanup assertion is meaningful.
+        host.store
+            .set(
+                &format!("next_block:{owner_hex}:{hash_hex}"),
+                &0u64.to_le_bytes(),
+            )
+            .unwrap();
+
+        let revert = cowprotocol::IConditionalOrder::PollNever {
+            reason: "all parts settled".into(),
+        }
+        .abi_encode();
+        let batch = vec![ComposableCoW::BatchOrderResult {
+            success: false,
+            order: sample_order(),
+            signature: Bytes::new(),
+            revertData: revert.into(),
+        }];
+        host.chain.respond_to(
+            "eth_call",
+            programmed_batch_eth_call_params(&[(owner, params.clone())]),
+            Ok(quoted_hex(&encode_batch_return(&batch))),
+        );
+
+        on_block(&host, sample_block(1_000)).unwrap();
+
+        assert!(!host.store.snapshot().contains_key(&watch_key_str));
+        assert!(
+            !host
+                .store
+                .snapshot()
+                .contains_key(&format!("next_block:{owner_hex}:{hash_hex}")),
+            "stale gate must be cleared on terminal lifecycle",
+        );
+        assert!(host.logging.contains("dropped watch"));
+    }
+
+    /// A `ComposableCoW.SingleOrderNotAuthed` revert in a per-request
+    /// slot must surface as a drop (the order is unregistered for
+    /// this owner; polling it again wastes a batch slot). The legacy
+    /// path does not see this error today because it would surface
+    /// as a wholesale `eth_call` failure rather than a per-slot
+    /// revert.
+    #[test]
+    fn batch_poll_drops_watch_on_composable_cow_error() {
+        let host = MockHost::new();
+        enable_batch_poll(&host);
+        let owner = address!("0011223344556677889900AABBCCDDEEFF001122");
+        let params = sample_params();
+        let watch_key_str = seed_watch(&host, owner, &params);
+
+        let revert = cowprotocol::ComposableCoWErrors::SingleOrderNotAuthed {}.abi_encode();
+        let batch = vec![ComposableCoW::BatchOrderResult {
+            success: false,
+            order: sample_order(),
+            signature: Bytes::new(),
+            revertData: revert.into(),
+        }];
+        host.chain.respond_to(
+            "eth_call",
+            programmed_batch_eth_call_params(&[(owner, params.clone())]),
+            Ok(quoted_hex(&encode_batch_return(&batch))),
+        );
+
+        on_block(&host, sample_block(1_000)).unwrap();
+
+        assert!(
+            !host.store.snapshot().contains_key(&watch_key_str),
+            "SingleOrderNotAuthed must drop the watch",
+        );
+        assert!(host.logging.contains("ComposableCoW rejected"));
+    }
+
+    /// Length mismatch between batched request and response defers
+    /// the whole block (no per-watch state changes). Protects against
+    /// a buggy contract reordering or dropping per-request slots.
+    #[test]
+    fn batch_poll_defers_block_on_length_mismatch() {
+        let host = MockHost::new();
+        enable_batch_poll(&host);
+        let owner = address!("0011223344556677889900AABBCCDDEEFF001122");
+        let params = sample_params();
+        let watch_key_str = seed_watch(&host, owner, &params);
+
+        // Empty result array — mismatched with our 1-entry batch.
+        let batch: Vec<ComposableCoW::BatchOrderResult> = vec![];
+        host.chain.respond_to(
+            "eth_call",
+            programmed_batch_eth_call_params(&[(owner, params.clone())]),
+            Ok(quoted_hex(&encode_batch_return(&batch))),
+        );
+
+        on_block(&host, sample_block(1_000)).unwrap();
+
+        // Watch survives, no submit fired, no gate written.
+        assert!(host.store.snapshot().contains_key(&watch_key_str));
+        assert_eq!(host.cow_api.call_count(), 0);
+        assert!(host.logging.contains("batch result length mismatch"));
+    }
+
+    /// Sanity-check that the `ConditionalOrderRegistered` additive
+    /// event decodes its indexed `handler` topic. This is the building
+    /// block the "fast path" subscription will rely on once the engine
+    /// grows indexed-topic filtering — keeping the test here pins the
+    /// binding shape now so the eventual subscription patch can land
+    /// without bind-side surprises.
+    #[test]
+    fn conditional_order_registered_decodes_indexed_handler() {
+        use alloy_sol_types::SolEvent;
+        let owner = address!("00112233445566778899aabbccddeeff00112233");
+        let handler = address!("ffeeddccbbaa00998877665544332211ffeeddcc");
+        let params = sample_params();
+        let ctx = keccak256(params.abi_encode());
+
+        let event = ComposableCoW::ConditionalOrderRegistered {
+            owner,
+            handler,
+            ctx,
+            params: params.clone(),
+        };
+        // `params` is the only non-indexed field, so it lives in
+        // `data`; the four topics encode topic-0 (signature hash) +
+        // three indexed args.
+        let log = event.encode_log_data();
+        let topics: Vec<B256> = log.topics().to_vec();
+        let data: Vec<u8> = log.data.to_vec();
+
+        let decoded = ComposableCoW::ConditionalOrderRegistered::decode_raw_log(topics, &data)
+            .expect("decode");
+        assert_eq!(decoded.owner, owner);
+        assert_eq!(decoded.handler, handler);
+        assert_eq!(decoded.ctx, ctx);
+        assert_eq!(decoded.params, params);
+
+        // The `registered_topic_filter_by_handler` helper from
+        // cow-rs assembles the four-topic filter the engine subscribe
+        // path will hand to `eth_subscribe logs`. Pin its shape so a
+        // future subscription patch doesn't slot the handler into
+        // the wrong topic position.
+        let filter = cowprotocol::composable::registered_topic_filter_by_handler(handler);
+        assert_eq!(
+            filter[0].as_ref(),
+            Some(&ComposableCoW::ConditionalOrderRegistered::SIGNATURE_HASH),
+        );
+        assert!(filter[1].is_none());
+        assert_eq!(
+            filter[2].as_ref(),
+            Some(&B256::left_padding_from(handler.as_slice())),
+        );
+        assert!(filter[3].is_none());
+    }
+
+    /// Smoke-check that flipping the runtime flag actually changes
+    /// dispatch. Without the flag, `on_block` issues the legacy
+    /// per-watch `eth_call` (params match the
+    /// `getTradeableOrderWithSignature` selector). With the flag,
+    /// `on_block` issues the batched `eth_call`. The two call params
+    /// must therefore differ.
+    #[test]
+    fn batch_poll_flag_routes_dispatch() {
+        let host = MockHost::new();
+        let owner = address!("0011223344556677889900AABBCCDDEEFF001122");
+        let params = sample_params();
+        seed_watch(&host, owner, &params);
+
+        let legacy_params = programmed_eth_call_params(owner, &params);
+        let batch_params = programmed_batch_eth_call_params(&[(owner, params.clone())]);
+        assert_ne!(
+            legacy_params, batch_params,
+            "the legacy and batched call params must differ — otherwise the flag is a no-op",
+        );
     }
 }

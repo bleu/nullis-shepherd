@@ -112,18 +112,29 @@ dbg_macro = "deny"
 todo = "deny"
 
 # `cowprotocol` v1.0.0-alpha.3 (the crates.io release the engine
-# depends on) was cut from `cowdao-grants/cow-rs` PR #5 at commit
-# `1742ffa`. `bleu/cow-rs` main has diverged since with: the
-# `composable::Proof` width fix (relevant to the TWAP poll path),
-# `OrderCreation` zero-from-address fast-fail, the `order_book` /
-# `composable` submodule splits, `OrderPostErrorKind` + `retry_hint()`
-# (BLEU-822, the protocol-level retry contract M2 modules dispatch
-# on), and `OrderBookApi::with_base_url(chain, base_url)` for barn /
-# staging routing (BLEU-823). Patching to that commit picks the lot
-# up without waiting for an alpha.4 publish. Drop once
-# `cowprotocol >= 1.0.0-alpha.4` ships.
+# depends on) was cut from an earlier commit; bleu/cow-rs main has
+# diverged with the `composable::Proof` width fix, `OrderCreation`
+# zero-from-address fast-fail, the `order_book` / `composable`
+# submodule splits, `OrderPostErrorKind` + `retry_hint()` (the
+# protocol-level retry contract modules dispatch on), and
+# `OrderBookApi::with_base_url(chain, base_url)` for barn / staging
+# routing.
+#
+# Bumped to a head that additionally lands the composable-cow
+# bindings:
+#   - `ComposableCoW::ConditionalOrderRegistered` event (handler-indexed)
+#   - `BatchOrderRequest` / `BatchOrderResult` +
+#     `batchGetTradeableOrdersWithSignatureCall`
+#   - `OrderInfo` + `getOrderInfoCall`
+#   - `PollOutcome`, `BatchOrderOutcome`, `ComposableCoWError` enums
+#   - `decode_conditional_order_revert`, `decode_composable_cow_error`,
+#     `decode_batch_order_result(s)`,
+#     `registered_topic_filter_by_handler` helpers
+# Patching to that commit lets the twap-monitor consume the new
+# surface behind a runtime flag. Drop once bleu/cow-rs main absorbs
+# these changes and a tagged release ships.
 [patch.crates-io]
-cowprotocol = { git = "https://github.com/bleu/cow-rs", rev = "57f5f553ab28c9fff54089daf2d39b4282f3e4dd" }
+cowprotocol = { git = "https://github.com/bleu/cow-rs", rev = "3ba20753d91c71c1bd594e78b94b013052e963ba" }
 
 [profile.dev]
 panic = "abort"

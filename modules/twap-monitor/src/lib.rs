@@ -31,7 +31,7 @@ wit_bindgen::generate!({
 
 mod strategy;
 
-use nexum::host::{logging, types};
+use nexum::host::{local_store, logging, types};
 
 // `WitBindgenHost`, `convert_err`, `sdk_err_into_wit`, `convert_level`
 // are generated below. Single source of truth in `shepherd-sdk`.
@@ -40,8 +40,28 @@ shepherd_sdk::bind_host_via_wit_bindgen!();
 struct TwapMonitor;
 
 impl Guest for TwapMonitor {
-    fn init(_config: Vec<(String, String)>) -> Result<(), HostError> {
+    fn init(config: Vec<(String, String)>) -> Result<(), HostError> {
         logging::log(logging::Level::Info, "twap-monitor init");
+
+        // Composable-cow batched poll path
+        // (`batchGetTradeableOrdersWithSignature`). Default off until
+        // the batched contract surface deploys upstream; today's
+        // ComposableCoW does not expose the batch view, so the legacy
+        // per-watch poll path is the only safe runtime.
+        let use_batch = config
+            .iter()
+            .find(|(k, _)| k == "use_batch_poll")
+            .map(|(_, v)| v == "true")
+            .unwrap_or(false);
+        let flag_bytes: &[u8] = if use_batch { b"true" } else { b"false" };
+        local_store::set(strategy::CONFIG_USE_BATCH_POLL_KEY, flag_bytes)?;
+        if use_batch {
+            logging::log(
+                logging::Level::Info,
+                "twap-monitor: batched poll path ENABLED \
+                 (requires ComposableCoW batched contract surface)",
+            );
+        }
         Ok(())
     }
 
