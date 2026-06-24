@@ -23,6 +23,28 @@ test:
 test-e2e: build-module build-engine
     cargo test -p nexum-engine supervisor::tests::e2e
 
+# Build the M2 modules (twap-monitor + ethflow-watcher) for wasm32-wasip2.
+build-m2:
+    cargo build -p twap-monitor    --target wasm32-wasip2 --release
+    cargo build -p ethflow-watcher --target wasm32-wasip2 --release
+
+# Run nexum-engine wired for the M2 smoke / round-trip scenario
+# (Sepolia, both M2 modules). See `docs/operations/m2-testnet-runbook.md`.
+run-m2: build-m2 build-engine
+    cargo run -p nexum-engine -- --engine-config engine.m2.toml
+
+# Build the M3 example modules (price-alert + balance-tracker + stop-loss)
+# for wasm32-wasip2.
+build-m3:
+    cargo build -p price-alert     --target wasm32-wasip2 --release
+    cargo build -p balance-tracker --target wasm32-wasip2 --release
+    cargo build -p stop-loss       --target wasm32-wasip2 --release
+
+# Run nexum-engine wired for the M3 smoke / validation scenario
+# (Sepolia, 3 example modules). See `docs/operations/m3-testnet-runbook.md`.
+run-m3: build-m3 build-engine
+    cargo run -p nexum-engine -- --engine-config engine.m3.toml
+
 # Check the entire workspace
 check:
     cargo check --target wasm32-wasip2 -p example

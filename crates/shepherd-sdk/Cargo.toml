@@ -1,0 +1,26 @@
+[package]
+name = "shepherd-sdk"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Guest-side SDK for Shepherd modules: re-exports, helpers, and prelude on top of cowprotocol + alloy types."
+
+[lib]
+# Plain library - modules link this and emit their own cdylib for the
+# WASM Component. Building shepherd-sdk on the host target is also
+# supported so the helpers are unit-testable without a wasm toolchain.
+
+[dependencies]
+cowprotocol = { version = "1.0.0-alpha.3", default-features = false }
+alloy-primitives = { version = "1.6", default-features = false, features = ["std", "serde"] }
+alloy-sol-types = { version = "1.5", default-features = false, features = ["std"] }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
+thiserror = "2"
+
+[dev-dependencies]
+# Property-based tests over the codec round-trips + validation
+# functions with non-trivial input spaces. The PR #55 review rubric
+# called these out explicitly; example-based coverage stays in place
+# and proptest supplements it.
+proptest = { version = "1", default-features = false, features = ["std"] }

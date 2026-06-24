@@ -2,7 +2,7 @@
 
 ## Module Package: the Nexum Module Bundle
 
-A module is distributed as a **bundle** — a WASM component plus a manifest that declares its identity, event subscriptions, chain requirements, and resource limits. The manifest is the bridge between packaging, the event system, and the runtime lifecycle.
+A module is distributed as a **bundle** - a WASM component plus a manifest that declares its identity, event subscriptions, chain requirements, and resource limits. The manifest is the bridge between packaging, the event system, and the runtime lifecycle.
 
 ### Manifest (`nexum.toml`)
 
@@ -26,12 +26,12 @@ max_state_bytes = 52_428_800    # 50 MB
 [module.restart]
 max_consecutive_failures = 10   # Dead after this many consecutive failures
 
-# Chain requirements — the runtime provides RPC for these
+# Chain requirements - the runtime provides RPC for these
 [chains]
 required = [42161]               # Arbitrum (must have)
 optional = [1, 100]              # Mainnet, Gnosis (used if available)
 
-# Capability negotiation (new in 0.2) — which host primitives the module needs.
+# Capability negotiation (new in 0.2) - which host primitives the module needs.
 # Optional imports trap with host-error { kind: unsupported } on call rather
 # than failing instantiation. Omitting this section falls back to
 # "all imports required" with a deprecation warning.
@@ -43,7 +43,7 @@ denied   = []
 [capabilities.http]
 allow = ["api.cow.fi"]            # outbound HTTP domain allowlist
 
-# Event subscriptions — declares what the runtime should feed this module
+# Event subscriptions - declares what the runtime should feed this module
 [[subscription]]
 kind = "block"
 chain_id = 42161
@@ -58,7 +58,7 @@ topics = ["0x…"]                 # ComposableCoW ConditionalOrderCreated
 kind = "cron"
 schedule = "*/5 * * * *"         # every 5 minutes
 
-# Typed config — TOML values preserve their type at the guest (0.2)
+# Typed config - TOML values preserve their type at the guest (0.2)
 [config]
 cow_api_url = "https://api.cow.fi/arbitrum"
 min_twap_interval_secs = 120     # integer stays integer
@@ -67,11 +67,11 @@ enable_alerts = true             # boolean stays boolean
 
 Key design points:
 
-- **`component` is a content hash**, not a filename. The runtime resolves it via the content store (see below). (Was `wasm = ...` in 0.1 — see the migration guide.)
-- **`[[subscription]]` blocks are declarative.** The module doesn't set up its own subscriptions imperatively — the runtime reads the manifest and wires up event sources before calling `init`. The 0.1 spelling was `[[subscribe]]` with `type = ...`; 0.2 uses `[[subscription]]` with `kind = ...` because `type` is a reserved word in several binding languages.
+- **`component` is a content hash**, not a filename. The runtime resolves it via the content store (see below). (Was `wasm = ...` in 0.1 - see the migration guide.)
+- **`[[subscription]]` blocks are declarative.** The module doesn't set up its own subscriptions imperatively - the runtime reads the manifest and wires up event sources before calling `init`. The 0.1 spelling was `[[subscribe]]` with `type = ...`; 0.2 uses `[[subscription]]` with `kind = ...` because `type` is a reserved word in several binding languages.
 - **`[capabilities]`** is new in 0.2 and now drives what the runtime links into the module's import space. See the migration guide for the full schema (including `[capabilities.http]` allowlists and `[capabilities.identity].methods` subsets).
 - **`resources` are caps**, not requests. The runtime enforces them via wasmtime's `ResourceLimiter` and fuel system.
-- **`chains.required`** — if the runtime doesn't have an RPC endpoint for a required chain, the module fails to load (fast, clear error).
+- **`chains.required`** - if the runtime doesn't have an RPC endpoint for a required chain, the module fails to load (fast, clear error).
 - **`config`** is opaque to the runtime. 0.2 keeps 0.1's stringly-typed shape (`list<tuple<string, string>>`); the host flattens TOML scalars (numbers, booleans) to their string form on the way through. A typed `config-value` variant is on the 0.3 roadmap, bundled with the manifest-parser work.
 
 ### Bundle Format
@@ -98,7 +98,7 @@ How the directory is represented depends on the content backend:
 
 ## Content-Addressed Distribution
 
-Distribution is **agnostic** — the runtime resolves content by hash through pluggable backends. The manifest's `wasm` field is a content address; the `source` in the runtime config tells the runtime *where* to look.
+Distribution is **agnostic** - the runtime resolves content by hash through pluggable backends. The manifest's `wasm` field is a content address; the `source` in the runtime config tells the runtime *where* to look.
 
 ### Content Reference Scheme
 
@@ -152,7 +152,7 @@ registry = "ghcr.io"
 This means:
 - A **local dev** just drops `.wasm` files in a directory.
 - A **production deployment** fetches from Swarm or OCI on first load, then caches locally.
-- **Integrity is always verified** — the content hash in the manifest is the trust anchor, not the transport.
+- **Integrity is always verified** - the content hash in the manifest is the trust anchor, not the transport.
 
 ## Module Lifecycle
 
@@ -178,7 +178,7 @@ stateDiagram-v2
 |-------|-------------|
 | **Resolve** | Content store resolves `component` hash to local path. Fail -> `Dead`. |
 | **Load** | `Component::from_file`, create `InstancePre`. Validates that the component satisfies the target WIT world (`nexum:host/event-module` or `shepherd:cow/shepherd`). Installs trap stubs for capabilities the manifest declares `optional` but the host does not provide. Fail -> `Dead`. |
-| **Init** | Create `Store`, instantiate, call `init(config)` inside an implicit write transaction (same semantics as `on_event` — commit on success, rollback on failure). Module sets up internal state. Fail -> `Restart` (might be transient). |
+| **Init** | Create `Store`, instantiate, call `init(config)` inside an implicit write transaction (same semantics as `on_event` - commit on success, rollback on failure). Module sets up internal state. Fail -> `Restart` (might be transient). |
 | **Run** | Runtime dispatches events to `on_event`. Each call gets a fuel budget. Module processes events and may call host imports (chain, local-store, identity, cow-api, etc.). |
 | **Restart** | After a trap or error. Backoff: 1s -> 2s -> 4s -> ... -> 5min cap. A fresh `Store` is created (clean memory), but **local-store data persists** (it's in redb, external to the WASM instance). |
 | **Dead** | After N consecutive failures (poison pill detection) or explicit operator shutdown. No further event dispatch. Requires manual intervention. |
@@ -186,10 +186,10 @@ stateDiagram-v2
 ### Key Lifecycle Properties
 
 - **State survives restarts.** The redb key-value store is external to the WASM instance. A restarted module picks up where it left off.
-- **Memory does not survive restarts.** Each restart creates a fresh `Store` — clean linear memory, no stale pointers.
+- **Memory does not survive restarts.** Each restart creates a fresh `Store` - clean linear memory, no stale pointers.
 - **`InstancePre` is reused.** Compilation and linking are done once at Load. Restarts only create a new `Store` and call `init` again.
 - **Config is immutable for a loaded module.** Changing config requires a reload (new Load cycle).
-- **Hot-reload sequence.** When a module update is detected (e.g. ENS contenthash changed): (1) let the current in-flight `on_event` complete, (2) stop event dispatch for this module, (3) fetch and compile the new `Component`, (4) create new `InstancePre`, (5) create fresh `Store`, (6) call `init` with new config — state table is inherited (module handles migration), (7) resume event dispatch. The old `InstancePre` is dropped.
+- **Hot-reload sequence.** When a module update is detected (e.g. ENS contenthash changed): (1) let the current in-flight `on_event` complete, (2) stop event dispatch for this module, (3) fetch and compile the new `Component`, (4) create new `InstancePre`, (5) create fresh `Store`, (6) call `init` with new config - state table is inherited (module handles migration), (7) resume event dispatch. The old `InstancePre` is dropped.
 
 ## Event System
 
@@ -257,7 +257,7 @@ When an event fires:
 - **Sequential within a module.** Events for the same module are dispatched in order. A module sees block N before block N+1. This is enforced by a per-module dispatch queue (Tokio `mpsc` channel).
 - **Best-effort delivery.** If a module is in Restart state when an event arrives, the event is queued (bounded buffer). If the buffer fills, oldest events are dropped and a warning is logged.
 - **No acknowledgement.** A successful return from `on_event` is not an ack. The module is responsible for using the local-store to track its own progress (e.g. "last processed block").
-- **Catch-up after gaps.** Events can be dropped during restart (bounded buffer overflow). Modules should query for missed data on startup — e.g. in `init`, read `last_block` from local-store, use the alloy `Provider` (backed by `chain::request`) to call `get_block_number()` and `get_logs()` to backfill any gap. This is a best practice, not enforced by the runtime.
+- **Catch-up after gaps.** Events can be dropped during restart (bounded buffer overflow). Modules should query for missed data on startup - e.g. in `init`, read `last_block` from local-store, use the alloy `Provider` (backed by `chain::request`) to call `get_block_number()` and `get_logs()` to backfill any gap. This is a best practice, not enforced by the runtime.
 
 ### Event Type Encoding
 
@@ -283,7 +283,7 @@ record tick {
 }
 ```
 
-The runtime serialises event data via the canonical ABI (handled automatically by `bindgen!`). Note the 0.2 semantic change: all `u64` timestamps in 0.2 are **milliseconds since Unix epoch, UTC**. The 0.1 WIT did not specify a unit and several sources used seconds — audit any timestamp arithmetic. The `tick` variant (formerly `timer(u64)`) is now a record so bindings read `event.tick.firedAt` instead of comparing a bare integer.
+The runtime serialises event data via the canonical ABI (handled automatically by `bindgen!`). Note the 0.2 semantic change: all `u64` timestamps in 0.2 are **milliseconds since Unix epoch, UTC**. The 0.1 WIT did not specify a unit and several sources used seconds - audit any timestamp arithmetic. The `tick` variant (formerly `timer(u64)`) is now a record so bindings read `event.tick.firedAt` instead of comparing a bare integer.
 
 ## Updated WIT Worlds
 
@@ -384,7 +384,7 @@ interface identity {
     sign-typed-data: func(account: list<u8>, typed-data: string) -> result<list<u8>, host-error>;
 }
 
-/// Universal event-driven module world — platform-agnostic. Imports the six
+/// Universal event-driven module world - platform-agnostic. Imports the six
 /// primitives in 0.2 (identity was missing from the 0.1 WIT despite being
 /// part of the primitive taxonomy).
 world event-module {
@@ -424,7 +424,7 @@ interface cow-api {
         -> result<string, host-error>;
 }
 
-/// CoW Protocol module world — extends event-module with cow-api.
+/// CoW Protocol module world - extends event-module with cow-api.
 world shepherd {
     include nexum:host/event-module;
 
@@ -466,11 +466,11 @@ Operator deploys a module:
    → Router → twap-monitor's dispatch queue
    → Tokio task calls on_event(Event::Block(…))
    → Module calls chain::request (via alloy Provider), local-store get, cow-api submit-order
-   → Returns Ok(()) — runtime logs success
+   → Returns Ok(()) - runtime logs success
 
 7. On crash:
    → Module trapped (fuel exhaustion / panic)
    → Runtime logs error, enters Restart state
    → Backoff 1s, creates fresh Store, calls init again
-   → Local-store data still intact — module resumes
+   → Local-store data still intact - module resumes
 ```
