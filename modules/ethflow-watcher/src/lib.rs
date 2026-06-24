@@ -26,7 +26,7 @@
 #![allow(clippy::too_many_arguments)]
 
 // The wit-bindgen-generated import shims only resolve against the
-// engine's wasm component host — they have no native-target
+// engine's wasm component host - they have no native-target
 // equivalent. Cfg-gate the entire glue layer so the `rlib` artefact
 // (consumed by `shepherd-backtest`, COW-1078) carries just the
 // strategy code without dangling `extern "C"` imports. The

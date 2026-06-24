@@ -189,7 +189,7 @@ fn poll_one<H: Host>(
             // `PollTryAtBlock` / `PollTryAtEpoch` / `OrderNotValid` /
             // `PollNever` into the corresponding `PollOutcome`. The
             // `None` branch covers transport-level failures (timeout,
-            // serde, websocket drop) — those default to retrying on
+            // serde, websocket drop) - those default to retrying on
             // the next block.
             if let Some(data) = err.data.as_deref()
                 && let Some(outcome) = shepherd_sdk::chain::decode_revert_hex(data)
@@ -338,8 +338,8 @@ fn submit_ready<H: Host>(
     // COW-1085: short-circuit if the orderbook UID for this exact
     // (order, owner, chain) tuple is already in our local-store as
     // `submitted:`. The poll-tick can re-fire `Ready` for the same
-    // TWAP child in successive blocks — `getTradeableOrderWithSignature`
-    // does not know shepherd already POSTed it — and re-submitting
+    // TWAP child in successive blocks - `getTradeableOrderWithSignature`
+    // does not know shepherd already POSTed it - and re-submitting
     // wastes an appData GET + submit_order call and emits a
     // misleading `DuplicatedOrder` Warn. The UID computation is
     // deterministic from on-chain inputs (and matches what the
@@ -366,7 +366,7 @@ fn submit_ready<H: Host>(
     // rejects with "app_data JSON digest does not match signed
     // app_data hash". Resolve the document via the orderbook
     // mirror; on 404 (orderbook doesn't know the hash) leave the
-    // watch in place — there is no path to recover without
+    // watch in place - there is no path to recover without
     // operator intervention.
     let app_data_json = match shepherd_sdk::cow::resolve_app_data(host, chain_id, &order.appData) {
         Ok(json) => json,
@@ -453,7 +453,7 @@ fn submit_ready<H: Host>(
 /// (COW-1085).
 ///
 /// Returns `None` if the chain id is unsupported by `cowprotocol::Chain`
-/// or the order carries an unknown enum marker — both cases also stop
+/// or the order carries an unknown enum marker - both cases also stop
 /// the regular submit path downstream, so the caller can fall through
 /// to the normal flow and let it surface the appropriate diagnostic.
 fn compute_uid_hex(chain_id: u64, order: &GPv2OrderData, owner: Address) -> Option<String> {
@@ -1033,7 +1033,7 @@ mod tests {
         assert_eq!(
             host.cow_api.request_calls().len(),
             0,
-            "appData resolve must NOT be called either — the guard short-circuits early",
+            "appData resolve must NOT be called either - the guard short-circuits early",
         );
         assert!(
             host.logging.contains(&format!(
@@ -1112,7 +1112,7 @@ mod tests {
 
     /// COW-1074: when the orderbook 404s the appData hash (no
     /// mirror exists), the strategy logs a Warn and leaves the
-    /// watch in place — neither a `submitted:` nor a `dropped:`
+    /// watch in place - neither a `submitted:` nor a `dropped:`
     /// marker is written, and no submit attempt is made.
     #[test]
     fn poll_ready_skips_submit_when_app_data_hash_not_mirrored() {
