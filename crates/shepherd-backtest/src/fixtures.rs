@@ -99,13 +99,25 @@ impl RawLog {
     }
 }
 
+/// Errors surfaced by [`parse_address`].
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum AddressParseError {
+    /// `hex::decode` rejected the hex string body.
+    #[error("hex decode: {0}")]
+    Hex(#[from] hex::FromHexError),
+    /// Decoded bytes were not 20 bytes long.
+    #[error("expected 20-byte address, got {0}")]
+    WrongLength(usize),
+}
+
 /// Decode a `0x...` address string into the 20-byte representation
 /// the strategy uses.
-pub fn parse_address(s: &str) -> Result<[u8; 20], String> {
+pub fn parse_address(s: &str) -> Result<[u8; 20], AddressParseError> {
     let raw = s.strip_prefix("0x").unwrap_or(s);
-    let bytes = hex::decode(raw).map_err(|e| format!("hex decode: {e}"))?;
+    let bytes = hex::decode(raw)?;
     if bytes.len() != 20 {
-        return Err(format!("expected 20-byte address, got {}", bytes.len()));
+        return Err(AddressParseError::WrongLength(bytes.len()));
     }
     let mut out = [0u8; 20];
     out.copy_from_slice(&bytes);

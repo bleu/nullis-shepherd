@@ -16,6 +16,8 @@
 //! still loaded and counted in the report so the gap is visible,
 //! but the replay is gated on a paid endpoint (Phase 2B).
 
+#![cfg_attr(not(test), warn(unused_crate_dependencies))]
+
 use std::path::PathBuf;
 
 use clap::Parser;
@@ -52,10 +54,10 @@ struct Args {
     accept_threshold: f64,
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     eprintln!(
-        "=== shepherd-backtest — loading {} ===",
+        "=== shepherd-backtest - loading {} ===",
         args.fixtures.display()
     );
     let raw = std::fs::read_to_string(&args.fixtures)?;
@@ -89,7 +91,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let report_md = report::render(&fx, &outcomes, args.accept_threshold);
     let out_path = args.out.unwrap_or_else(|| {
-        let date = fx.metadata.collected_at.split('T').next().unwrap_or("unknown");
+        let date = fx
+            .metadata
+            .collected_at
+            .split('T')
+            .next()
+            .unwrap_or("unknown");
         PathBuf::from(format!(
             "docs/operations/backtest-reports/backtest-{}d-{}.md",
             fx.metadata.window_days, date
