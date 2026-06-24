@@ -143,6 +143,18 @@ pub fn on_block<H: Host>(host: &H, chain_id: u64, settings: &Settings) -> Result
                     ),
                 );
             }
+            // `RetryAction` is `#[non_exhaustive]`; treat unknown
+            // future variants like `TryNextBlock` rather than
+            // silently dropping the watch on an SDK bump.
+            _ => {
+                host.log(
+                    LogLevel::Warn,
+                    &format!(
+                        "stop-loss unknown retry-action ({}): {} - retry on next block",
+                        err.code, err.message
+                    ),
+                );
+            }
         },
     }
     Ok(())
