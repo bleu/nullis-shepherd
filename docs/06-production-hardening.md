@@ -2,14 +2,14 @@
 
 ## Resource Enforcement
 
-Four resource dimensions are capped per module, all driven by the manifest's `[module.resources]`:
+Four resource dimensions are capped per module. **In 0.2, caps come from compile-time global defaults** (`DEFAULT_FUEL_PER_EVENT = 1_000_000_000`, `DEFAULT_MEMORY_LIMIT = 64 MiB` in `crates/nexum-engine/src/runtime/limits.rs`); per-module overrides via the manifest's `[module.resources]` section are a future direction (0.3). The mechanism and shape below describe what the 0.2 engine actually enforces - using global values where this doc previously read `module_config.max_*`.
 
 ### CPU: Fuel
 
-Each `on_event` call is budgeted `max_fuel_per_event` fuel units. Exhaustion traps the call (state rolled back -- see doc 04). The budget prevents infinite loops and excessive computation.
+Each `on_event` call is budgeted `DEFAULT_FUEL_PER_EVENT` fuel units. Exhaustion traps the call (state rolled back -- see doc 04). The budget prevents infinite loops and excessive computation.
 
 ```rust
-store.set_fuel(module_config.max_fuel_per_event)?;
+store.set_fuel(DEFAULT_FUEL_PER_EVENT)?;
 ```
 
 Fuel is deterministic -- the same WASM code consumes the same fuel regardless of host machine speed.
@@ -35,43 +35,11 @@ store.epoch_deadline_async_yield_and_update(10); // yield after 10 epochs (~1s)
 
 ### Memory
 
-`ResourceLimiter` implementation caps linear memory growth:
-
-```rust
-impl ResourceLimiter for NexumHostState {
-    fn memory_growing(
-        &mut self,
-        current: usize,
-        desired: usize,
-        maximum: Option<usize>,
-    ) -> Result<bool> {
-        let limit = self.module_config.max_memory_bytes;
-        if desired > limit {
-            tracing::warn!(
-                module = %self.module_id,
-                current, desired, limit,
-                "memory growth denied"
-            );
-            Ok(false)
-        } else {
-            Ok(true)
-        }
-    }
-
-    fn table_growing(
-        &mut self,
-        current: u32,
-        desired: u32,
-        maximum: Option<u32>,
-    ) -> Result<bool> {
-        Ok(desired <= 10_000) // sane default
-    }
-}
-```
+The engine builds a `wasmtime::StoreLimitsBuilder` with `DEFAULT_MEMORY_LIMIT` and attaches it to each module's store at dispatch time (see `crates/nexum-engine/src/supervisor.rs`). `memory.grow` is denied past the cap. Future direction: a per-module `ResourceLimiter` driven by `module_config.max_memory_bytes` from the manifest; not in 0.2 scope.
 
 ### Storage
 
-Local-store quota (`max_state_bytes`) enforced in the `local-store::set` host function (see doc 04). Rejected with a clear error, not a trap -- the module can handle it gracefully.
+Local-store quota is enforced on the `local-store::set` host path. The 0.2 engine treats the cap as a host-side constant; a manifest-driven `max_state_bytes` is future direction. Rejected with a clear `host-error` (see doc 04), not a trap -- the module can handle it gracefully.
 
 ### Summary
 
@@ -347,13 +315,15 @@ nexum_events_dispatched_total{module="twap-monitor",event_type="block"} 150234
 
 ## Health Checks
 
-### HTTP Health Endpoint
+> **Future direction, not in 0.2 scope.** A dedicated `:8080/health` JSON endpoint is described below as design intent for 0.3. The 0.2 engine does **not** bind a separate health port; liveness is signalled by the metrics scrape (`:9100/metrics` returns 200 iff the engine is running and the Prometheus exporter is up) and by the structured `tracing` JSON on stdout (per-module state transitions and quarantine events). Docker / compose configurations use a TCP/bash health probe against the metrics port (see [`docs/deployment/docker.md`](deployment/docker.md)).
+
+### HTTP Health Endpoint (future direction)
 
 ```
 GET /health -> 200 OK | 503 Service Unavailable
 ```
 
-Response:
+Intended response shape:
 
 ```json
 {
@@ -370,7 +340,7 @@ Response:
 }
 ```
 
-Health is `unhealthy` if:
+When this endpoint lands, health would be `unhealthy` if:
 - Any required chain's RPC is disconnected.
 - Any module is in `Dead` state.
 - Last event age exceeds a configurable staleness threshold (suggests subscription dropped and backfill failed).
@@ -381,9 +351,9 @@ listen = "0.0.0.0:8080"
 stale_event_threshold_seconds = 60
 ```
 
-### Docker / Kubernetes
+### Docker / Kubernetes (0.2 today)
 
-The health endpoint serves as the liveness probe. A readiness probe checks that at least one module is in `Run` state and all required chains are connected.
+Today the metrics endpoint and the supervisor `tracing` stream cover the liveness signal. A TCP probe against the metrics port works as a liveness check (see `docker-compose.yml` and `docs/deployment/docker.md` for the shipped configuration). Once the dedicated `:8080/health` endpoint lands, the recommended probe shape would be:
 
 ```yaml
 livenessProbe:
@@ -428,53 +398,54 @@ enabled = true
 listen = "0.0.0.0:9090"
 path = "/metrics"
 
-# -- Health --
-[health]
-listen = "0.0.0.0:8080"
-stale_event_threshold_seconds = 60
+# -- Health (future direction; not bound in 0.2) --
+# [health]
+# listen = "0.0.0.0:8080"
+# stale_event_threshold_seconds = 60
 
 # -- Epoch ticker --
 [runtime]
 epoch_interval_ms = 100
 epoch_deadline = 10          # epochs before yield (~1s)
 
-# -- Global resource defaults (overridden by per-module manifest) --
-[runtime.defaults.resources]
-max_memory_bytes = 10_485_760
-max_fuel_per_event = 100_000
-max_state_bytes = 52_428_800
+# -- Resource defaults --
+# In 0.2 these come from compile-time constants in
+# crates/nexum-engine/src/runtime/limits.rs (DEFAULT_FUEL_PER_EVENT = 1B,
+# DEFAULT_MEMORY_LIMIT = 64 MiB). Manifest-driven per-module overrides are
+# a future direction (0.3).
 
 # -- Global restart defaults --
-[runtime.defaults.restart]
-max_consecutive_failures = 10
+# In 0.2 the restart policy is the global exponential backoff (1s -> 2s ->
+# ... cap 5 min) defined in runtime/restart_policy.rs and the poison
+# threshold (POISON_MAX_FAILURES = 5 within 600 s) in runtime/poison_policy.rs.
+# Per-module overrides via [module.restart] are a future direction.
 ```
 
 ## Deployment: Docker
 
+The shipped Dockerfile lives at the repo root; see [`docs/deployment/docker.md`](deployment/docker.md) for the canonical operator-facing configuration. The shape is a multi-stage build with `tini` PID1, a non-root `shepherd` user, the five reference modules baked in, and the metrics port exposed:
+
 ```dockerfile
-FROM rust:1.90-slim AS builder
-WORKDIR /build
-COPY . .
-RUN cargo build --release --bin nexum
+FROM rust:1.96-slim-bookworm AS builder
+# ... cargo build --release -p nexum-engine + module wasm builds ...
 
 FROM debian:bookworm-slim
-COPY --from=builder /build/target/release/nexum /usr/local/bin/
-EXPOSE 8080 9090
-ENTRYPOINT ["nexum", "--config", "/etc/nexum/config.toml"]
+COPY --from=builder /build/target/release/nexum-engine /usr/local/bin/
+EXPOSE 9100   # metrics
+ENTRYPOINT ["tini", "--", "nexum-engine"]
 ```
 
 ```bash
 docker run -d \
-  -v /etc/nexum:/etc/nexum \
-  -v /var/nexum:/var/nexum \
-  -p 8080:8080 \
-  -p 9090:9090 \
-  nexum:latest
+  -v /etc/shepherd:/etc/shepherd \
+  -v /var/shepherd:/var/shepherd \
+  -p 9100:9100 \
+  shepherd:latest
 ```
 
 Volumes:
-- `/etc/nexum/` -- runtime config, module manifests.
-- `/var/nexum/` -- local-store (`state.redb`), content cache, logs.
+- `/etc/shepherd/` -- engine config, module manifests.
+- `/var/shepherd/` -- local-store (`state.redb`), content cache, logs.
 
 ## Operational Runbook (CLI)
 
