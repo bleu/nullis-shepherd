@@ -171,16 +171,11 @@ No WASI interfaces are imported. All I/O is mediated through host interfaces. Th
 A module ships as a **bundle**: a manifest (`nexum.toml`) plus a compiled WASM component.
 
 ```toml
-# nexum.toml
+# module.toml
 [module]
 name = "twap-monitor"
 version = "0.3.0"
 component = "sha256:9f86d081…"  # content hash of module.wasm
-
-[module.resources]
-max_memory_bytes = 10_485_760    # 10 MB
-max_fuel_per_event = 100_000
-max_state_bytes = 52_428_800     # 50 MB
 
 [chains]
 required = [42161]               # must have RPC for these chains
@@ -198,7 +193,9 @@ cow_api_url = "https://api.cow.fi/arbitrum"
 slippage_bps = 50                # integers stay integers in 0.2
 ```
 
-The manifest declares identity, resource caps, chain requirements, event subscriptions, capability grants, and typed module config - everything the runtime needs to load and run the module. In 0.2, `[capabilities]` is the canonical place to declare what host primitives a module needs; imports listed as `optional` install trap stubs that return `host-error { kind: unsupported }` on call rather than failing instantiation. Omitting `[capabilities]` falls back to "all imports required" with a deprecation warning.
+The manifest declares identity, chain requirements, event subscriptions, capability grants, and typed module config - everything the runtime needs to load and run the module. In 0.2, `[capabilities]` is the canonical place to declare what host primitives a module needs; the engine cross-checks the component's WIT imports against `required` + `optional` at boot (link-time) and refuses to instantiate a module that imports an undeclared capability. Omitting `[capabilities]` falls back to "all imports required" with a deprecation warning.
+
+> Per-module resource caps (`[module.resources]`: `max_memory_bytes`, `max_fuel_per_event`, `max_state_bytes`) are **not in 0.2 scope** - the engine uses global defaults (`DEFAULT_FUEL_PER_EVENT = 1B`, `DEFAULT_MEMORY_LIMIT = 64 MiB`). Per-module overrides via the manifest are a future direction; today, an operator who needs different caps changes the global defaults at build time. The `optional` trap-stub fallback for absent host imports is also deferred to 0.3 - in 0.2, every linked import resolves to a real host function.
 
 -> Full spec: [02-modules-events-packaging.md](02-modules-events-packaging.md)
 
@@ -263,31 +260,26 @@ stateDiagram-v2
 
 -> Full design: [04-state-store.md](04-state-store.md)
 
-## SDK (Layered)
+## SDK
 
-The SDK mirrors the WIT layering: `nexum-sdk` (universal) and `shepherd-sdk` (CoW extension, re-exports `nexum-sdk`).
+The 0.2 SDK ships as a single crate, `shepherd-sdk`, with `shepherd-sdk-test` providing the mock-host surface for unit tests. The longer-term direction - a separate universal `nexum-sdk` crate that `shepherd-sdk` re-exports - is documented as design intent in [05-sdk-design.md](05-sdk-design.md) and is not in 0.2 scope. See [ADR-0009](adr/0009-host-trait-surface.md) for the shipped host-trait seam that replaces the proc-macro design described in earlier drafts of doc 05.
 
 | Crate | Provides |
 |-------|----------|
-| `nexum-sdk` | `provider(chain_id)` - full alloy `Provider` backed by host RPC via `HostTransport` |
-| | `Signer` - signing client (get accounts, sign messages, sign EIP-712 typed data) |
-| | `TypedState` - serde-based typed local state (postcard serialisation) |
-| | `RemoteStore` - typed decentralised storage client (upload, download, feeds) |
-| | `Messaging` - typed messaging client (publish, query) |
-| | `abi::sol!` - compile-time Ethereum ABI codec (alloy-sol-types) |
-| | `log::{info!, …}` - formatted logging macros |
+| `shepherd-sdk` | `host::{ChainHost, LocalStoreHost, CowApiHost, LoggingHost, Host}` - per-capability traits + supertrait, the seam modules implement against |
 | | `HostError` / `HostErrorKind` - unified host error type with `?` support |
-| | `#[nexum::module]` - proc macro for universal modules |
-| `shepherd-sdk` | `Cow` - typed CoW Protocol API client backed by host `cow-api` interface |
-| | `#[shepherd::module]` - proc macro for CoW modules (extends `#[nexum::module]`) |
-| | `prelude::*` - all types, interfaces, helpers in one import |
-| Both | `testing::MockHost` - native-Rust unit tests with mock host |
-| | `testing::WasmTestHarness` - integration tests in real wasmtime |
-| | `cargo nexum` - CLI: new / build / package / publish / check / migrate |
+| | `chain::{eth_call_params, parse_eth_call_result, decode_revert_hex}` - JSON-RPC plumbing helpers |
+| | `cow::{order, composable, error}` - CoW Protocol bridging (`gpv2_to_order_data`, `PollOutcome`, `RetryAction`, `classify_api_error`) |
+| | `prelude::*` - alloy primitives + cowprotocol order / signing / orderbook surface in one import |
+| `shepherd-sdk-test` | `MockHost` + per-trait `MockChain` / `MockLocalStore` / `MockCowApi` / `MockLogging` for native-Rust strategy tests |
 
-Multi-language support: module authors can use Rust, C/C++, Go, JavaScript, or Python - all compile to valid components against the same WIT world.
+Future direction (not in 0.2): a `#[nexum::module]` / `#[shepherd::module]` proc macro that subsumes the `wit_bindgen::generate!` + `WitBindgenHost` adapter boilerplate, a typed `TypedState` / `Signer` / `Cow` API client, alloy `Provider` injection via `HostTransport`, and a separate `nexum-sdk` crate for non-CoW universal modules. None of those land in 0.2.
 
--> Full design: [05-sdk-design.md](05-sdk-design.md)
+The operator CLI is the `nexum-engine` binary itself (`cargo run -p nexum-engine`); a separate `cargo nexum` subcommand for module authors (new / build / package / publish / check / migrate) is future direction, not in 0.2 scope. Today modules are built with `cargo build --target wasm32-wasip2 --release`.
+
+Multi-language support: module authors can use Rust, C/C++, Go, JavaScript, or Python - all compile to valid components against the same WIT world via `wit-bindgen`. The SDK is a Rust ergonomics layer on top of the WIT contract; non-Rust authors target the WIT directly.
+
+-> Full design: [05-sdk-design.md](05-sdk-design.md) | M3 architectural decision: [ADR-0009](adr/0009-host-trait-surface.md)
 
 ## Production Hardening
 
@@ -313,10 +305,9 @@ All host functions return `result<T, host-error>` in 0.2. `host-error` carries a
 | Signal | Stack | Endpoint |
 |--------|-------|----------|
 | Logs | `tracing` -> JSON | stdout |
-| Metrics | `metrics` -> Prometheus | `:9090/metrics` |
-| Health | HTTP JSON | `:8080/health` |
+| Metrics | `metrics` -> Prometheus | `:9100/metrics` (default; see `docs/production.md`) |
 
-Metrics cover three groups: runtime-level (modules loaded/dead), per-module (events, latency, fuel, restarts, state usage), per-chain RPC (requests, errors, fallbacks, blocks behind).
+Metrics cover three groups: runtime-level (modules loaded/dead), per-module (events, latency, fuel, restarts, state usage), per-chain RPC (requests, errors, fallbacks, blocks behind). Liveness is signalled by the metrics scrape (`/metrics` returns 200 iff the engine is running and the Prometheus exporter is up) plus the structured `tracing` JSON on stdout. A dedicated `:8080/health` JSON endpoint with a per-module table is a future direction, not in 0.2 scope - operators today scrape `/metrics` and inspect the JSON log stream.
 
 -> Full design: [06-production-hardening.md](06-production-hardening.md)
 
@@ -341,38 +332,39 @@ The mobile/wallet host story - including the experimental `query-module` world's
 |---|-----------|--------|------------------|
 | 1 | Core Runtime & Event System | 120h | wasmtime Component Model host, WIT interfaces, event sources, redb local store, CLI |
 | 2 | TWAP & Ethflow Modules | 100h | TWAP monitor, Ethflow monitor, ComposableCoW contract mods |
-| 3 | SDK & Developer Experience | 60h | `nexum-sdk` + `shepherd-sdk` crates, proc macro, testing framework, examples, docs |
+| 3 | SDK & Developer Experience | 60h | `shepherd-sdk` + `shepherd-sdk-test` crates (host-trait seam per ADR-0009), example modules, tutorial, docs |
 | 4 | Production Hardening | 60h | Resource limits, restart policy, logging, metrics, health checks |
 | 5 | Multi-Chain & Deployment | 40h | Multi-chain config, Docker image, deployment docs |
 
 ## Repository Structure
 
 ```
-nexum/
+shepherd/
 ├── crates/
-│   ├── nexum-engine/       Core WASM host (server), event system, local store
-│   ├── nexum-sdk/          Universal Rust SDK (HostTransport, Signer, TypedState, RemoteStore, Messaging)
-│   ├── shepherd-sdk/       CoW Protocol SDK (Cow, extends nexum-sdk)
-│   ├── cli/                nexum operator CLI (run, module, state)
-│   └── cargo-nexum/        cargo subcommand for module authors (new, build, package, publish, check, migrate)
+│   ├── nexum-engine/       Core WASM host (server), event system, local store, CLI entry point
+│   ├── shepherd-sdk/       Rust SDK: host-trait seam, HostError, chain + cow helpers (ADR-0009)
+│   ├── shepherd-sdk-test/  Mock host (MockChain / MockLocalStore / MockCowApi / MockLogging) for strategy tests
+│   └── shepherd-backtest/  Backtest harness against captured chain fixtures
 ├── modules/
 │   ├── twap-monitor/       TWAP order monitoring module
-│   └── ethflow-watcher/    Ethflow order monitoring module
+│   ├── ethflow-watcher/    Ethflow order monitoring module
+│   └── examples/           price-alert, balance-tracker, stop-loss reference modules
 ├── wit/
-│   ├── nexum-host/      Universal WIT package (chain, identity, local-store, remote-store, messaging, logging)
+│   ├── nexum-host/         Universal WIT package (chain, identity, local-store, remote-store, messaging, logging, http, clock, random)
 │   └── shepherd-cow/       CoW Protocol WIT package (cow-api, shepherd)
-├── docker/
-│   └── Dockerfile
+├── Dockerfile
+├── docker-compose.yml
 └── docs/
     ├── 00-overview.md
-    ├── 01-runtime-environment.md
-    ├── 02-modules-events-packaging.md
-    ├── 03-module-discovery.md
-    ├── 04-state-store.md
-    ├── 05-sdk-design.md
-    ├── 06-production-hardening.md
-    ├── 07-rpc-namespace-design.md
-    ├── 08-platform-generalisation.md
-    └── migration/
-        └── 0.1-to-0.2.md
+    ├── 01-runtime-environment.md … 08-platform-generalisation.md
+    ├── adr/                ADR-0001 … ADR-0009 (canonical architectural decisions)
+    ├── deployment/         Docker + Prometheus operator config
+    ├── diagrams/           Mermaid diagrams + reference captions
+    ├── operations/         Runbooks, E2E reports, load reports, baselines
+    ├── production.md       Operator handbook
+    ├── sdk.md              Module-author entry point (shipped SDK reference)
+    ├── tutorial-first-module.md
+    └── migration/0.1-to-0.2.md
 ```
+
+A future direction (not in 0.2) is to split the SDK into a separate universal `nexum-sdk` crate (re-exported by `shepherd-sdk`) and to ship a `cargo-nexum` subcommand for module authors. Neither lands in 0.2.
