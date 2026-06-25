@@ -11,6 +11,7 @@
 //! [`ApiError`]: cowprotocol::error::ApiError
 
 use cowprotocol::error::ApiError;
+use strum::IntoStaticStr;
 
 /// What the lifecycle layer should do after a failed submission.
 ///
@@ -19,7 +20,14 @@ use cowprotocol::error::ApiError;
 /// today because cowprotocol's `retry_hint()` is bool-only; the
 /// variant is kept so dispatch can grow into it once a server
 /// `Retry-After` hint shows up.
-#[derive(Debug, Eq, PartialEq)]
+///
+/// `IntoStaticStr` exposes each variant as a snake_case `&'static
+/// str` so the dispatch layer can record
+/// `shepherd_cow_api_retry_total{action=...}` and surface the action
+/// in `tracing::info!(retry_action = ...)` without an ad-hoc match
+/// ladder.
+#[derive(Debug, Eq, PartialEq, IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
 #[non_exhaustive]
 pub enum RetryAction {
     /// Leave the watch / placement in place; the next event will
