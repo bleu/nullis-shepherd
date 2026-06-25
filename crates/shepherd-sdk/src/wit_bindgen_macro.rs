@@ -98,8 +98,7 @@ macro_rules! bind_host_via_wit_bindgen {
                 path: &str,
                 body: ::core::option::Option<&str>,
             ) -> ::core::result::Result<::std::string::String, $crate::host::HostError> {
-                shepherd::cow::cow_api::request(chain_id, method, path, body)
-                    .map_err(convert_err)
+                shepherd::cow::cow_api::request(chain_id, method, path, body).map_err(convert_err)
             }
         }
 
