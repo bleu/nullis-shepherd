@@ -43,6 +43,7 @@
 //! upstream. If the orderbook 404s, IPFS would too — the doc isn't
 //! pinned anywhere we can see from inside the engine.
 
+use alloy_primitives::B256;
 use cowprotocol::EMPTY_APP_DATA_HASH;
 
 use crate::host::{CowApiHost, HostError, HostErrorKind};
@@ -50,18 +51,24 @@ use crate::host::{CowApiHost, HostError, HostErrorKind};
 /// Look up the JSON document corresponding to a signed `appData`
 /// hash. See module-level docs for behaviour.
 ///
+/// The hash is a 32-byte EVM word; the SDK takes [`B256`] across the
+/// public surface rather than a raw `&[u8; 32]` per the rubric's
+/// protocol-ID newtype rule. Callers holding a raw byte array
+/// convert via `B256::from_slice(&bytes[..])` at the WIT boundary.
+///
 /// ```no_run
 /// use shepherd_sdk::cow::resolve_app_data;
 /// use shepherd_sdk::host::{CowApiHost, HostError};
+/// use shepherd_sdk::prelude::B256;
 ///
-/// fn pin_doc<H: CowApiHost>(host: &H, chain_id: u64, hash: &[u8; 32]) -> Result<String, HostError> {
+/// fn pin_doc<H: CowApiHost>(host: &H, chain_id: u64, hash: &B256) -> Result<String, HostError> {
 ///     resolve_app_data(host, chain_id, hash)
 /// }
 /// ```
 pub fn resolve_app_data<H: CowApiHost + ?Sized>(
     host: &H,
     chain_id: u64,
-    app_data_hash: &[u8; 32],
+    app_data_hash: &B256,
 ) -> Result<String, HostError> {
     if app_data_hash.as_slice() == EMPTY_APP_DATA_HASH.as_slice() {
         return Ok(cowprotocol::EMPTY_APP_DATA_JSON.to_string());
@@ -84,8 +91,8 @@ pub fn resolve_app_data<H: CowApiHost + ?Sized>(
 /// to [`alloy_primitives::hex::encode`] (alloy is already a direct
 /// dependency of this crate) per mfw78's PR #8 guidance against
 /// carrying our own hex formatters.
-fn encode_hex(bytes: &[u8; 32]) -> String {
-    format!("0x{}", alloy_primitives::hex::encode(bytes))
+fn encode_hex(hash: &B256) -> String {
+    format!("0x{}", alloy_primitives::hex::encode(hash.as_slice()))
 }
 
 /// Parse the orderbook's `/api/v1/app_data/{hash}` response shape:
@@ -162,7 +169,7 @@ mod tests {
     fn empty_hash_short_circuits_without_host_call() {
         let stub = ok_stub("should never be read");
         let resolved =
-            resolve_app_data(&stub, 1, EMPTY_APP_DATA_HASH.as_slice().try_into().unwrap()).unwrap();
+            resolve_app_data(&stub, 1, &B256::from_slice(EMPTY_APP_DATA_HASH.as_slice())).unwrap();
         assert_eq!(resolved, "{}");
         assert!(
             stub.last_call.borrow().is_none(),
@@ -174,9 +181,10 @@ mod tests {
     fn non_empty_hash_routes_to_orderbook_and_extracts_full_app_data() {
         let stub =
             ok_stub(r#"{"fullAppData":"{\"version\":\"1.1.0\"}","appDataHash":"0xc4bc..."}"#);
-        let mut hash = [0u8; 32];
-        hash[0] = 0xc4;
-        hash[1] = 0xbc;
+        let mut bytes = [0u8; 32];
+        bytes[0] = 0xc4;
+        bytes[1] = 0xbc;
+        let hash = B256::from(bytes);
         let resolved = resolve_app_data(&stub, 11_155_111, &hash).unwrap();
         assert_eq!(resolved, r#"{"version":"1.1.0"}"#);
         let (cid, method, path) = stub.last_call.borrow().clone().unwrap();
@@ -192,8 +200,9 @@ mod tests {
     #[test]
     fn missing_full_app_data_field_returns_internal_with_body_in_data() {
         let stub = ok_stub(r#"{"appDataHash":"0xabcd","appData":"{}"}"#);
-        let mut hash = [0u8; 32];
-        hash[0] = 0xc4;
+        let mut bytes = [0u8; 32];
+        bytes[0] = 0xc4;
+        let hash = B256::from(bytes);
         let err = resolve_app_data(&stub, 1, &hash).unwrap_err();
         assert_eq!(err.kind, HostErrorKind::Internal);
         assert!(err.message.contains("fullAppData"), "got: {}", err.message);
@@ -206,8 +215,9 @@ mod tests {
     #[test]
     fn host_error_propagates_unchanged() {
         let stub = err_stub(404, HostErrorKind::Unavailable);
-        let mut hash = [0u8; 32];
-        hash[0] = 0xc4;
+        let mut bytes = [0u8; 32];
+        bytes[0] = 0xc4;
+        let hash = B256::from(bytes);
         let err = resolve_app_data(&stub, 1, &hash).unwrap_err();
         assert_eq!(err.code, 404);
         assert_eq!(err.kind, HostErrorKind::Unavailable);
@@ -215,9 +225,10 @@ mod tests {
 
     #[test]
     fn hex_encoder_is_lower_case_and_64_wide() {
-        let mut h = [0u8; 32];
-        h[31] = 0xff;
-        h[0] = 0xab;
-        assert_eq!(encode_hex(&h), format!("0xab{}ff", "00".repeat(30)));
+        let mut bytes = [0u8; 32];
+        bytes[31] = 0xff;
+        bytes[0] = 0xab;
+        let hash = B256::from(bytes);
+        assert_eq!(encode_hex(&hash), format!("0xab{}ff", "00".repeat(30)));
     }
 }
