@@ -19,6 +19,8 @@
 //! toolchain. See `shepherd-sdk-test`'s README for the adapter
 //! pattern.
 
+use strum::IntoStaticStr;
+
 /// Severity for log messages routed through [`LoggingHost::log`].
 /// Mirrors `nexum:host/logging.level`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -38,7 +40,16 @@ pub enum LogLevel {
 /// Coarse categorisation of host failures, mirrored verbatim from
 /// `nexum:host/types.host-error-kind` so a module's wit-bindgen
 /// `HostErrorKind` can convert one-to-one.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+///
+/// `IntoStaticStr` exposes each variant as a snake_case `&'static
+/// str` so module strategies and the engine can wire structured-log
+/// and metric labels straight off the enum without an
+/// `error_kind` ladder per call site. `#[non_exhaustive]` lets the
+/// runtime grow new kinds (e.g. a dedicated `WasmTrap`) without
+/// breaking downstream `match` sites.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
+#[non_exhaustive]
 pub enum HostErrorKind {
     /// Capability declared but not provisioned by the operator.
     Unsupported,
