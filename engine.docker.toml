@@ -1,9 +1,9 @@
 # Docker-ready engine config. Pre-wired for the file layout the
 # repo's `Dockerfile` bakes:
 #
-#   /opt/shepherd/modules/<name>.wasm        — compiled components
-#   /opt/shepherd/manifests/<name>.toml      — per-module manifests
-#   /var/lib/shepherd/                       — redb state (named volume)
+#   /opt/shepherd/modules/<name>.wasm        - compiled components
+#   /opt/shepherd/manifests/<name>.toml      - per-module manifests
+#   /var/lib/shepherd/                       - redb state (named volume)
 #
 # Secrets come from env vars (see `.env.example`). The engine
 # substitutes `${VAR_NAME}` tokens at load time; a missing variable
@@ -28,7 +28,7 @@ log_level = "info"
 enabled = true
 # Bind to all interfaces inside the container so the compose port
 # mapping (127.0.0.1:9100 host -> 9100 container) reaches it. NEVER
-# publish `0.0.0.0:9100` on the host without authn — see
+# publish `0.0.0.0:9100` on the host without authn - see
 # docs/production.md §7.
 bind_addr = "0.0.0.0:9100"
 
