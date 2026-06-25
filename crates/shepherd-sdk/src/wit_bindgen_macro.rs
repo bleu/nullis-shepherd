@@ -137,6 +137,11 @@ macro_rules! bind_host_via_wit_bindgen {
         /// Reverse direction: lift the SDK `HostError` back into the
         /// per-cdylib wit-bindgen `HostError` so `Guest::init` /
         /// `Guest::on_event` can return what wit-bindgen expects.
+        ///
+        /// Carries a wildcard arm because `$crate::host::HostErrorKind`
+        /// is `#[non_exhaustive]`: a future SDK-side variant must
+        /// compile in module crates without source changes. Falls
+        /// back to `Internal` as the safest conservative remapping.
         fn sdk_err_into_wit(e: $crate::host::HostError) -> HostError {
             HostError {
                 domain: e.domain,
@@ -162,6 +167,10 @@ macro_rules! bind_host_via_wit_bindgen {
                     $crate::host::HostErrorKind::Internal => {
                         nexum::host::types::HostErrorKind::Internal
                     }
+                    // `$crate::host::HostErrorKind` is `#[non_exhaustive]`.
+                    // Fall back to `Internal` for any future SDK-side
+                    // variant the module crate does not yet know about.
+                    _ => nexum::host::types::HostErrorKind::Internal,
                 },
                 code: e.code,
                 message: e.message,
