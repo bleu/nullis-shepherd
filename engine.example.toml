@@ -17,7 +17,7 @@
 #   export BASE_RPC_URL=wss://base-mainnet.g.alchemy.com/v2/<KEY>
 #
 # The Docker compose path picks these up from a gitignored `.env`
-# file at the repo root — see `.env.example` and
+# file at the repo root - see `.env.example` and
 # `docs/deployment/docker.md`.
 #
 # ## RPC scheme choice
@@ -42,7 +42,7 @@ log_level = "info"
 
 # One [chains.<id>] table per chain the engine should be able to talk
 # to. Chain ids are EVM decimal. Drop any entry whose env var you
-# haven't exported — `${VAR}` substitution fails fast with the exact
+# haven't exported - `${VAR}` substitution fails fast with the exact
 # missing variable named.
 
 [chains.1]                                   # Ethereum Mainnet
