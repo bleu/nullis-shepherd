@@ -151,6 +151,15 @@ mod tests {
         fn submit_order(&self, _chain_id: u64, _body: &[u8]) -> Result<String, HostError> {
             unreachable!("not used in this test")
         }
+        fn cow_api_request(
+            &self,
+            _chain_id: u64,
+            _method: &str,
+            _path: &str,
+            _body: Option<&str>,
+        ) -> Result<String, HostError> {
+            unreachable!("not used in this test")
+        }
     }
 
     fn encode_round(answer: i64) -> String {
