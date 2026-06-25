@@ -80,6 +80,7 @@
 #![warn(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
+pub mod address;
 pub mod chain;
 pub mod config;
 pub mod cow;
