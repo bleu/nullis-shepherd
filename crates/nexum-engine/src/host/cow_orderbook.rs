@@ -29,6 +29,20 @@ pub struct OrderBookPool {
     http: reqwest::Client,
 }
 
+/// Canonical CoW Protocol chain set the engine ships clients for.
+///
+/// Both `Default::default()` and `OrderBookPool::from_config` walk
+/// this single source of truth so a new chain joining CoW protocol
+/// only needs a one-line addition here instead of two parallel
+/// arrays.
+const DEFAULT_CHAINS: &[Chain] = &[
+    Chain::Mainnet,
+    Chain::Gnosis,
+    Chain::Sepolia,
+    Chain::ArbitrumOne,
+    Chain::Base,
+];
+
 impl Default for OrderBookPool {
     /// Build a pool covering every `cowprotocol::Chain` variant. Each entry
     /// uses the canonical `api.cow.fi/{slug}/api/v1` base URL from the SDK.
@@ -36,14 +50,7 @@ impl Default for OrderBookPool {
     /// barn or staging targets.
     fn default() -> Self {
         let http = reqwest::Client::new();
-        let chains = [
-            Chain::Mainnet,
-            Chain::Gnosis,
-            Chain::Sepolia,
-            Chain::ArbitrumOne,
-            Chain::Base,
-        ];
-        let clients = chains
+        let clients = DEFAULT_CHAINS
             .iter()
             .map(|c| (c.id(), OrderBookApi::new(*c)))
             .collect();
@@ -61,16 +68,8 @@ impl OrderBookPool {
     /// `tools/orderbook-mock`, and by staging/barn deployments that
     /// run against a non-production orderbook.
     pub fn from_config(cfg: &crate::engine_config::EngineConfig) -> Self {
-        use cowprotocol::OrderBookApi;
         let http = reqwest::Client::new();
-        let canonical = [
-            cowprotocol::Chain::Mainnet,
-            cowprotocol::Chain::Gnosis,
-            cowprotocol::Chain::Sepolia,
-            cowprotocol::Chain::ArbitrumOne,
-            cowprotocol::Chain::Base,
-        ];
-        let mut clients: BTreeMap<u64, OrderBookApi> = canonical
+        let mut clients: BTreeMap<u64, OrderBookApi> = DEFAULT_CHAINS
             .iter()
             .map(|c| (c.id(), OrderBookApi::new(*c)))
             .collect();
