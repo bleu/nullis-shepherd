@@ -16,7 +16,7 @@
 //! ## Behaviour
 //!
 //! - `hash == EMPTY_APP_DATA_HASH` (`keccak256("{}")`) → short-circuit
-//!   to [`EMPTY_APP_DATA_JSON`] (`"{}"`), no host call.
+//!   to [`cowprotocol::EMPTY_APP_DATA_JSON`] (`"{}"`), no host call.
 //! - Otherwise → `GET /api/v1/app_data/{hex}` on the chain's
 //!   orderbook. The 200 response is `{"fullAppData": "<JSON>"}`; we
 //!   pull `fullAppData` out and return it verbatim.
