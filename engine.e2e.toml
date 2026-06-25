@@ -31,7 +31,7 @@ log_level = "info,nexum_engine=debug"
 
 # COW-1034: bind /metrics so the operator can scrape Prometheus at
 # 60 s intervals during the run and check the e2e report's metrics
-# delta section. 127.0.0.1 is intentional — do not expose a metrics
+# delta section. 127.0.0.1 is intentional - do not expose a metrics
 # port on a public interface.
 [engine.metrics]
 enabled = true
