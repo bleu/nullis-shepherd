@@ -1,5 +1,15 @@
 # RPC Namespace Design: Generic JSON-RPC Passthrough
 
+> **Status: Future direction (0.3+ target).** The 0.2 reference runtime
+> ships the single `chain::request(chain_id, method, params)` WIT entry
+> point and forwards any method to the configured alloy provider without
+> a per-module allowlist. The "Method Allowlisting" section below
+> describes the **intended** 0.3+ enforcement (read-only default set,
+> per-module `[module.chain] extra_allowed_methods`, identity-delegated
+> signing methods); none of it is wired into `chain::request` in the
+> shipped binary. Treat the section as design intent until a tracking
+> issue lands the runtime check.
+
 > **Naming note (0.2):** This document describes the `chain` interface in the
 > `nexum:host` WIT package. In the 0.1 design history it was called `chain`
 > (short for "consensus"); 0.2 renamed it to `chain` because `chain.request(...)`
@@ -211,6 +221,15 @@ impl nexum::host::chain::Host for NexumHostState {
 That's it. The alloy provider already has the timeout/retry/rate-limit/fallback tower stack configured per chain (see doc 01). Every read-only `eth_*` method automatically inherits that middleware.
 
 ### Method Allowlisting
+
+> **Status: Future direction (0.3+ target).** The shipped 0.2 host
+> implementation of `chain::request` forwards any method string to
+> the alloy provider; it does **not** consult a read-only allowlist
+> and it does **not** intercept signing methods to delegate to the
+> identity backend. The categorisation below is the planned 0.3
+> enforcement model. Until that tracking issue lands the gating
+> code, operators must treat any chain-capable module as having
+> access to the full RPC surface their configured provider exposes.
 
 The host maintains two categories of methods: **read-only methods** (always allowed through the RPC passthrough) and **signing methods** (delegated to the `identity` backend).
 
