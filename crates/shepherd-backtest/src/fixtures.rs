@@ -99,27 +99,11 @@ impl RawLog {
     }
 }
 
-/// Errors surfaced by [`parse_address`].
-#[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
-pub enum AddressParseError {
-    /// `hex::decode` rejected the hex string body.
-    #[error("hex decode: {0}")]
-    Hex(#[from] hex::FromHexError),
-    /// Decoded bytes were not 20 bytes long.
-    #[error("expected 20-byte address, got {0}")]
-    WrongLength(usize),
-}
-
 /// Decode a `0x...` address string into the 20-byte representation
-/// the strategy uses.
-pub fn parse_address(s: &str) -> Result<[u8; 20], AddressParseError> {
-    let raw = s.strip_prefix("0x").unwrap_or(s);
-    let bytes = hex::decode(raw)?;
-    if bytes.len() != 20 {
-        return Err(AddressParseError::WrongLength(bytes.len()));
-    }
-    let mut out = [0u8; 20];
-    out.copy_from_slice(&bytes);
-    Ok(out)
+/// the strategy consumes. Thin wrapper around the shared
+/// [`shepherd_sdk::address::parse_address`] helper (JC5
+/// consolidation) so this crate, balance-tracker, and any future
+/// strategy module surface the same typed error.
+pub fn parse_address(s: &str) -> Result<[u8; 20], shepherd_sdk::address::AddressParse> {
+    shepherd_sdk::address::parse_address(s).map(|addr| addr.into_array())
 }
