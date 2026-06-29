@@ -210,9 +210,13 @@ pub fn extract_host(url: &str) -> Option<&str> {
     let after_scheme = url
         .strip_prefix("https://")
         .or_else(|| url.strip_prefix("http://"))?;
-    let host_end = after_scheme
-        .find('/')
-        .or_else(|| after_scheme.find('?'))
+    // Authority ends at the first `/`, `?`, or `#` — take the minimum
+    // position so that fragments and query strings containing `/` don't
+    // pollute the host extraction (COW-1096).
+    let host_end = [after_scheme.find('/'), after_scheme.find('?'), after_scheme.find('#')]
+        .into_iter()
+        .flatten()
+        .min()
         .unwrap_or(after_scheme.len());
     let host = &after_scheme[..host_end];
     // strip optional user-info and port.
@@ -261,5 +265,103 @@ mod tests {
         assert!(host_allowed("a.b.discord.com", &allow));
         assert!(!host_allowed("discord.com", &allow));
         assert!(!host_allowed("nope.example", &allow));
+    }
+
+    // -- extract_host edge-case tests (COW-1096 and related) --
+
+    #[test]
+    fn extract_host_fragment_with_slash() {
+        // COW-1096: fragment containing / should not affect host extraction
+        assert_eq!(extract_host("https://evil.com#/good.com"), Some("evil.com"));
+        assert_eq!(extract_host("https://evil.com#frag/path"), Some("evil.com"));
+    }
+
+    #[test]
+    fn extract_host_query_with_slash() {
+        assert_eq!(
+            extract_host("https://evil.com?redirect=https://good.com/path"),
+            Some("evil.com"),
+        );
+    }
+
+    #[test]
+    fn extract_host_strips_port() {
+        assert_eq!(extract_host("https://example.com:8443/path"), Some("example.com"));
+        assert_eq!(extract_host("https://example.com:80"), Some("example.com"));
+    }
+
+    #[test]
+    fn extract_host_ipv4_loopback() {
+        assert_eq!(extract_host("https://127.0.0.1/path"), Some("127.0.0.1"));
+        assert_eq!(extract_host("https://0.0.0.0/path"), Some("0.0.0.0"));
+    }
+
+    #[test]
+    fn extract_host_localhost() {
+        assert_eq!(extract_host("https://localhost/path"), Some("localhost"));
+        assert_eq!(extract_host("https://localhost:3000/path"), Some("localhost"));
+    }
+
+    #[test]
+    fn extract_host_ipv6() {
+        // IPv6 brackets: the naive `:` split for port-stripping breaks
+        // bracketed IPv6 — returns "[" instead of "[::1]". Documenting
+        // current behaviour; proper IPv6 handling is out of scope for M1.
+        let result = extract_host("https://[::1]/path");
+        assert_eq!(result, Some("["));
+    }
+
+    #[test]
+    fn extract_host_percent_encoded() {
+        // URL-encoded characters are returned as-is (no decoding).
+        assert_eq!(extract_host("https://evil%2Ecom/path"), Some("evil%2Ecom"));
+    }
+
+    #[test]
+    fn extract_host_empty_and_edge_cases() {
+        assert_eq!(extract_host("https:///path"), None); // empty host
+        assert_eq!(extract_host("https://"), None);       // nothing after scheme
+    }
+
+    // -- host_allowed bypass-attempt tests --
+
+    #[test]
+    fn host_allowed_rejects_localhost_and_loopback() {
+        let allow = vec!["api.cow.fi".to_string()];
+        assert!(!host_allowed("localhost", &allow));
+        assert!(!host_allowed("127.0.0.1", &allow));
+        assert!(!host_allowed("0.0.0.0", &allow));
+    }
+
+    #[test]
+    fn host_allowed_case_insensitive() {
+        let allow = vec!["Api.Cow.Fi".to_string()];
+        assert!(host_allowed("api.cow.fi", &allow));
+        assert!(host_allowed("API.COW.FI", &allow));
+        assert!(host_allowed("Api.Cow.Fi", &allow));
+    }
+
+    #[test]
+    fn host_allowed_wildcard_does_not_match_base_domain() {
+        // *.example.com should NOT match example.com itself
+        let allow = vec!["*.example.com".to_string()];
+        assert!(!host_allowed("example.com", &allow));
+        assert!(host_allowed("sub.example.com", &allow));
+        assert!(host_allowed("deep.sub.example.com", &allow));
+    }
+
+    #[test]
+    fn host_allowed_empty_allowlist_denies_all() {
+        let allow: Vec<String> = vec![];
+        assert!(!host_allowed("anything.com", &allow));
+        assert!(!host_allowed("localhost", &allow));
+    }
+
+    #[test]
+    fn host_allowed_rejects_suffix_injection() {
+        // "evil-api.cow.fi" should NOT match allowlisted "api.cow.fi"
+        let allow = vec!["api.cow.fi".to_string()];
+        assert!(!host_allowed("evil-api.cow.fi", &allow));
+        assert!(!host_allowed("notapi.cow.fi", &allow));
     }
 }
