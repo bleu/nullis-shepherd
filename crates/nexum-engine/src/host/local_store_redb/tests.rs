@@ -78,3 +78,165 @@ fn similar_names_differ() {
     let pb = namespace_prefix("module-b").unwrap();
     assert_ne!(pa, pb);
 }
+
+// ---------------------------------------------------------------------------
+// Concurrent access tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn concurrent_writes_from_different_namespaces() {
+    let (_dir, store) = fresh();
+
+    let handles: Vec<_> = (0..8)
+        .map(|i| {
+            let s = store.clone();
+            std::thread::spawn(move || {
+                let ns = format!("ns-{i}");
+                for j in 0..100 {
+                    let key = format!("key-{j}");
+                    let val = format!("val-{i}-{j}").into_bytes();
+                    s.set(&ns, &key, &val).unwrap();
+                }
+            })
+        })
+        .collect();
+
+    for h in handles {
+        h.join().expect("thread panicked");
+    }
+
+    for i in 0..8 {
+        let ns = format!("ns-{i}");
+        for j in 0..100 {
+            let key = format!("key-{j}");
+            let expected = format!("val-{i}-{j}").into_bytes();
+            assert_eq!(
+                store.get(&ns, &key).unwrap().as_deref(),
+                Some(expected.as_slice()),
+            );
+        }
+    }
+}
+
+#[test]
+fn concurrent_reads_during_writes() {
+    let (_dir, store) = fresh();
+
+    // Pre-populate namespace "rw" with 50 keys.
+    for j in 0..50 {
+        store
+            .set("rw", &format!("k-{j}"), b"old")
+            .unwrap();
+    }
+
+    let writer_store = store.clone();
+    let writer = std::thread::spawn(move || {
+        for j in 0..50 {
+            writer_store
+                .set("rw", &format!("k-{j}"), b"new")
+                .unwrap();
+        }
+    });
+
+    let readers: Vec<_> = (0..4)
+        .map(|_| {
+            let s = store.clone();
+            std::thread::spawn(move || {
+                for _ in 0..100 {
+                    for j in 0..50 {
+                        let val = s.get("rw", &format!("k-{j}")).unwrap();
+                        let val = val.expect("key must exist");
+                        assert!(
+                            val == b"old" || val == b"new",
+                            "unexpected value: {:?}",
+                            val,
+                        );
+                    }
+                }
+            })
+        })
+        .collect();
+
+    writer.join().expect("writer panicked");
+    for r in readers {
+        r.join().expect("reader panicked");
+    }
+
+    // Final state: all keys must be "new".
+    for j in 0..50 {
+        assert_eq!(
+            store.get("rw", &format!("k-{j}")).unwrap().as_deref(),
+            Some(&b"new"[..]),
+        );
+    }
+}
+
+#[test]
+fn list_keys_races_with_delete() {
+    let (_dir, store) = fresh();
+
+    // Pre-populate namespace "race" with 100 keys.
+    for i in 0..100 {
+        store
+            .set("race", &format!("k:{i}"), b"x")
+            .unwrap();
+    }
+
+    let deleter_store = store.clone();
+    let deleter = std::thread::spawn(move || {
+        for i in 0..100 {
+            deleter_store
+                .delete("race", &format!("k:{i}"))
+                .unwrap();
+        }
+    });
+
+    let lister_store = store.clone();
+    let lister = std::thread::spawn(move || {
+        for _ in 0..50 {
+            let keys = lister_store.list_keys("race", "k:").unwrap();
+            assert!(
+                keys.len() <= 100,
+                "list_keys returned more keys than expected: {}",
+                keys.len(),
+            );
+        }
+    });
+
+    deleter.join().expect("deleter panicked");
+    lister.join().expect("lister panicked");
+}
+
+#[test]
+fn stress_many_writers_one_namespace() {
+    let (_dir, store) = fresh();
+
+    let handles: Vec<_> = (0..8)
+        .map(|i| {
+            let s = store.clone();
+            std::thread::spawn(move || {
+                for j in 0..100 {
+                    let key = format!("t{i}-k{j}");
+                    let val = format!("v-{i}-{j}").into_bytes();
+                    s.set("shared", &key, &val).unwrap();
+                }
+            })
+        })
+        .collect();
+
+    for h in handles {
+        h.join().expect("thread panicked");
+    }
+
+    // Verify all 800 keys are present with correct values.
+    for i in 0..8 {
+        for j in 0..100 {
+            let key = format!("t{i}-k{j}");
+            let expected = format!("v-{i}-{j}").into_bytes();
+            assert_eq!(
+                store.get("shared", &key).unwrap().as_deref(),
+                Some(expected.as_slice()),
+            );
+        }
+    }
+}
