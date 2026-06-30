@@ -16,4 +16,8 @@ cowprotocol = { version = "1.0.0-alpha.3", default-features = false }
 alloy-primitives = { version = "1.6", default-features = false, features = ["std", "serde"] }
 alloy-sol-types = { version = "1.5", default-features = false, features = ["std"] }
 serde_json = { version = "1", default-features = false, features = ["alloc"] }
+strum = { version = "0.27", default-features = false, features = ["derive"] }
 thiserror = "2"
+
+[dev-dependencies]
+proptest = "1"
