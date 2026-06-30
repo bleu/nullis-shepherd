@@ -15,6 +15,8 @@
 > (short for "consensus"); 0.2 renamed it to `chain` because `chain.request(...)`
 > reads itself at the call site. The function signatures below are the 0.2 shape,
 > returning `host-error` rather than the 0.1-era `json-rpc-error`.
+>
+> **SDK-shape note (0.2):** The macro-driven authoring model below (`#[nexum::module]` / `#[shepherd::module]` with named event handlers and `&RootProvider` injection) and the separate `nexum-sdk` crate are **future direction, not in 0.2 scope** - see [ADR-0009](adr/0009-host-trait-surface.md) for the shipped host-trait seam that replaces the macro design. 0.2 modules call `host.request(chain_id, method, params_json)` directly against `ChainHost`. The WIT contract for `chain` is unchanged; only the guest-side ergonomics differ.
 
 ## Problem Statement
 

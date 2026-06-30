@@ -4,9 +4,9 @@
 
 A module is distributed as a **bundle** - a WASM component plus a manifest that declares its identity, event subscriptions, chain requirements, and resource limits. The manifest is the bridge between packaging, the event system, and the runtime lifecycle.
 
-### Manifest (`nexum.toml`)
+### Manifest (`module.toml`)
 
-Every module ships with a manifest:
+Every module ships with a manifest. The file is named `module.toml` in 0.2 (was `nexum.toml` in earlier drafts; per [ADR-0001](adr/0001-engine-toml-separate-from-nexum-toml.md) the operator/module split is now explicit).
 
 ```toml
 [module]
@@ -18,27 +18,19 @@ authors = ["mfw78.eth"]
 # Content hash of the compiled .wasm component
 component = "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
 
-[module.resources]
-max_memory_bytes = 10_485_760   # 10 MB
-max_fuel_per_event = 100_000
-max_state_bytes = 52_428_800    # 50 MB
-
-[module.restart]
-max_consecutive_failures = 10   # Dead after this many consecutive failures
-
 # Chain requirements - the runtime provides RPC for these
 [chains]
 required = [42161]               # Arbitrum (must have)
 optional = [1, 100]              # Mainnet, Gnosis (used if available)
 
 # Capability negotiation (new in 0.2) - which host primitives the module needs.
-# Optional imports trap with host-error { kind: unsupported } on call rather
-# than failing instantiation. Omitting this section falls back to
+# The engine cross-checks the component's WIT imports against `required` +
+# `optional` at boot (link-time). Imports outside the declared set fail
+# instantiation with a clear error. Omitting `[capabilities]` falls back to
 # "all imports required" with a deprecation warning.
 [capabilities]
 required = ["chain", "local-store", "logging"]
 optional = ["messaging", "remote-store"]
-denied   = []
 
 [capabilities.http]
 allow = ["api.cow.fi"]            # outbound HTTP domain allowlist
@@ -70,9 +62,10 @@ Key design points:
 - **`component` is a content hash**, not a filename. The runtime resolves it via the content store (see below). (Was `wasm = ...` in 0.1 - see the migration guide.)
 - **`[[subscription]]` blocks are declarative.** The module doesn't set up its own subscriptions imperatively - the runtime reads the manifest and wires up event sources before calling `init`. The 0.1 spelling was `[[subscribe]]` with `type = ...`; 0.2 uses `[[subscription]]` with `kind = ...` because `type` is a reserved word in several binding languages.
 - **`[capabilities]`** is new in 0.2 and now drives what the runtime links into the module's import space. See the migration guide for the full schema (including `[capabilities.http]` allowlists and `[capabilities.identity].methods` subsets).
-- **`resources` are caps**, not requests. The runtime enforces them via wasmtime's `ResourceLimiter` and fuel system.
 - **`chains.required`** - if the runtime doesn't have an RPC endpoint for a required chain, the module fails to load (fast, clear error).
 - **`config`** is opaque to the runtime. 0.2 keeps 0.1's stringly-typed shape (`list<tuple<string, string>>`); the host flattens TOML scalars (numbers, booleans) to their string form on the way through. A typed `config-value` variant is on the 0.3 roadmap, bundled with the manifest-parser work.
+
+> **Future direction (not in 0.2):** per-module resource caps via `[module.resources]` (`max_memory_bytes`, `max_fuel_per_event`, `max_state_bytes`), per-module restart policy via `[module.restart]`, and `optional`-import trap stubs that return `host-error { kind: unsupported }` on call. The 0.2 engine enforces resource limits using global defaults (`DEFAULT_FUEL_PER_EVENT = 1B`, `DEFAULT_MEMORY_LIMIT = 64 MiB` from `crates/nexum-engine/src/runtime/limits.rs`) and uses a global restart policy. Per-module overrides are on the 0.3 roadmap.
 
 ### Bundle Format
 

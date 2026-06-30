@@ -1,8 +1,8 @@
 # SDK Design: Layered SDK (`nexum-sdk` + `shepherd-sdk`)
 
-> **Current implementation status (M3, 2026-06-17)**
+> **Status: future direction, not in 0.2 scope.** This document is the **0.3+ north-star** vision for the layered SDK. The 0.2 SDK shipped a focused subset, and the macro-driven authoring model below was superseded by the host-trait seam in [ADR-0009](adr/0009-host-trait-surface.md) - that is the design that ships. Treat the macros, two-crate split, `TypedState`, `Signer`, `HostTransport` / `Provider`, and `cargo-nexum` CLI sections below as design intent, not API documentation. For the shipped surface, see [`sdk.md`](sdk.md) and the rustdoc on `crates/shepherd-sdk/`.
 >
-> This document is the **0.2 / M5+ north-star** vision. M3 shipped a focused subset; everything else below is deferred to M4/M5. The split:
+> The split, for quick reference:
 >
 > | Feature | M3 status | Where |
 > |---|---|---|
@@ -771,7 +771,9 @@ This tests the full component boundary (canonical ABI marshalling, host function
 
 ### `cargo-nexum` CLI
 
-> **Two separate tools:** `cargo-nexum` is a cargo subcommand for **module authors** (new, build, package, publish). The `nexum` binary (doc 06) is the **operator runtime** (run, module list/restart, local-store purge). They live in separate crates: `crates/cargo-nexum/` and `crates/cli/`.
+> **Future direction, not in 0.2 scope.** The `cargo-nexum` cargo subcommand described in this section does not ship in 0.2. Module authors today build with `cargo build --target wasm32-wasip2 --release` (the M5 reference repo includes a `justfile` with the canonical recipes). A `cargo-nexum` (or successor) scaffolding/packaging CLI is on the 0.3 roadmap.
+>
+> **Two separate tools (design intent):** `cargo-nexum` would be a cargo subcommand for **module authors** (new, build, package, publish). The `nexum-engine` binary is the **operator runtime** (run, module list/restart, local-store purge).
 
 ```bash
 cargo nexum new my-module
