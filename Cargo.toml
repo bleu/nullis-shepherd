@@ -59,11 +59,11 @@ clap = { version = "4", features = ["derive"] }
 # guest-facing crates use `alloy-primitives` + `alloy-sol-types` for
 # typed protocol values. Pinned together so a single workspace bump
 # moves every consumer at once.
-alloy-primitives = { version = "1.5", default-features = false, features = ["std", "serde"] }
-alloy-sol-types = { version = "1.5", default-features = false, features = ["std"] }
-alloy-provider = { version = "1.5", default-features = false, features = ["ws", "ipc", "pubsub", "reqwest"] }
-alloy-rpc-types-eth = { version = "1.5", default-features = false, features = ["std"] }
-alloy-transport-ws = { version = "1.5", default-features = false }
+alloy-primitives = { version = "1.6", default-features = false, features = ["std", "serde"] }
+alloy-sol-types = { version = "1.6", default-features = false, features = ["std"] }
+alloy-provider = { version = "1.8", default-features = false, features = ["ws", "ipc", "pubsub", "reqwest"] }
+alloy-rpc-types-eth = { version = "1.8", default-features = false, features = ["std"] }
+alloy-transport-ws = { version = "1.8", default-features = false }
 
 # CoW Protocol bindings. Pinned to one version across the workspace
 # (was `1.0.0-alpha` in engine vs `1.0.0-alpha.3` in SDK before

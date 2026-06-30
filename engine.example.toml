@@ -13,6 +13,13 @@ state_dir = "./data"
 # overrides at process start.
 log_level = "info"
 
+# Per-module wasmtime resource limits. Both fields are optional;
+# omitted values resolve to built-in defaults (1B fuel, 64 MiB memory).
+# Per-module overrides land in 0.3.
+[limits]
+# fuel_per_event = 1_000_000_000
+# memory_bytes   = 67_108_864
+
 # One [chains.<id>] table per chain the engine should be able to talk
 # to. Chain ids are EVM decimal. `ws://` and `wss://` URLs engage
 # alloy's pubsub transport (needed for `eth_subscribe`); `http://` and
