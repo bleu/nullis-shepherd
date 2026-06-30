@@ -16,17 +16,8 @@ cowprotocol = { version = "1.0.0-alpha.3", default-features = false }
 alloy-primitives = { version = "1.6", default-features = false, features = ["std", "serde"] }
 alloy-sol-types = { version = "1.5", default-features = false, features = ["std"] }
 serde_json = { version = "1", default-features = false, features = ["alloc"] }
-# `strum::IntoStaticStr` exposes snake_case variant names as `&'static
-# str` on the SDK's error and retry-action enums so consumers can wire
-# them into `metrics::counter!(..., "error_kind" => name)` and
-# `tracing::warn!(error_kind = name, ...)` without growing a `match
-# err { ... => "drop" ... }` ladder per call site.
-strum = { version = "0.26", default-features = false, features = ["derive"] }
+strum = { version = "0.27", default-features = false, features = ["derive"] }
 thiserror = "2"
 
 [dev-dependencies]
-# Property-based tests over the codec round-trips + validation
-# functions with non-trivial input spaces. The PR #55 review rubric
-# called these out explicitly; example-based coverage stays in place
-# and proptest supplements it.
-proptest = { version = "1", default-features = false, features = ["std"] }
+proptest = "1"

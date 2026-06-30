@@ -8,7 +8,12 @@ members = [
     "modules/examples/balance-tracker",
     "modules/examples/price-alert",
     "modules/examples/stop-loss",
+    "modules/fixtures/flaky-bomb",
+    "modules/fixtures/fuel-bomb",
+    "modules/fixtures/memory-bomb",
     "modules/twap-monitor",
+    "tools/load-gen",
+    "tools/orderbook-mock",
 ]
 resolver = "2"
 

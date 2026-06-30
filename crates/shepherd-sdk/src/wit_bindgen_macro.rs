@@ -90,6 +90,16 @@ macro_rules! bind_host_via_wit_bindgen {
             ) -> ::core::result::Result<::std::string::String, $crate::host::HostError> {
                 shepherd::cow::cow_api::submit_order(chain_id, body).map_err(convert_err)
             }
+
+            fn cow_api_request(
+                &self,
+                chain_id: u64,
+                method: &str,
+                path: &str,
+                body: ::core::option::Option<&str>,
+            ) -> ::core::result::Result<::std::string::String, $crate::host::HostError> {
+                shepherd::cow::cow_api::request(chain_id, method, path, body).map_err(convert_err)
+            }
         }
 
         impl $crate::host::LoggingHost for WitBindgenHost {
@@ -139,8 +149,8 @@ macro_rules! bind_host_via_wit_bindgen {
         /// `Guest::on_event` can return what wit-bindgen expects.
         ///
         /// Carries a wildcard arm because `$crate::host::HostErrorKind`
-        /// is `#[non_exhaustive]`: a future SDK-side variant must
-        /// compile in module crates without source changes. Falls
+        /// is `#[non_exhaustive]` (COW-1029): a future SDK-side variant
+        /// must compile in module crates without source changes. Falls
         /// back to `Internal` as the safest conservative remapping.
         fn sdk_err_into_wit(e: $crate::host::HostError) -> HostError {
             HostError {
@@ -167,9 +177,8 @@ macro_rules! bind_host_via_wit_bindgen {
                     $crate::host::HostErrorKind::Internal => {
                         nexum::host::types::HostErrorKind::Internal
                     }
-                    // `$crate::host::HostErrorKind` is `#[non_exhaustive]`.
-                    // Fall back to `Internal` for any future SDK-side
-                    // variant the module crate does not yet know about.
+                    // `$crate::host::HostErrorKind` is `#[non_exhaustive]`
+                    // (COW-1029). Fall back to `Internal`.
                     _ => nexum::host::types::HostErrorKind::Internal,
                 },
                 code: e.code,
@@ -179,9 +188,12 @@ macro_rules! bind_host_via_wit_bindgen {
         }
 
         /// Translate the SDK `LogLevel` into the wit-bindgen
-        /// `logging::Level`. Exhaustive (no wildcard) so adding a new
-        /// level in the SDK fails to compile every consumer
-        /// explicitly.
+        /// `logging::Level`.
+        ///
+        /// Carries a wildcard arm because `$crate::host::LogLevel` is
+        /// `#[non_exhaustive]` (COW-1029): a future SDK-side level
+        /// must compile in module crates without source changes. Falls
+        /// back to `Info` as the most neutral default.
         fn convert_level(l: $crate::host::LogLevel) -> nexum::host::logging::Level {
             match l {
                 $crate::host::LogLevel::Trace => nexum::host::logging::Level::Trace,
@@ -189,6 +201,9 @@ macro_rules! bind_host_via_wit_bindgen {
                 $crate::host::LogLevel::Info => nexum::host::logging::Level::Info,
                 $crate::host::LogLevel::Warn => nexum::host::logging::Level::Warn,
                 $crate::host::LogLevel::Error => nexum::host::logging::Level::Error,
+                // `$crate::host::LogLevel` is `#[non_exhaustive]`
+                // (COW-1029). Fall back to `Info`.
+                _ => nexum::host::logging::Level::Info,
             }
         }
     };

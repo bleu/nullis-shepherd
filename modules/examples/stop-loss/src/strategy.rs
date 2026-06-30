@@ -345,6 +345,40 @@ mod tests {
         format!("{uid}")
     }
 
+    /// Regression test pinning the OrderUid produced by the COW-1064
+    /// E2E run's `modules/examples/stop-loss/module.toml` config so an
+    /// operator can `setPreSignature(uid, true)` ahead of the run
+    /// without re-deriving the UID from the EIP-712 / domain-
+    /// separator dance. If this assertion ever flips, either:
+    ///   (a) the module.toml has drifted from the pinned settings, or
+    ///   (b) the EIP-712 type-hash / domain-separator changed,
+    /// and the runbook's `setPreSignature` step needs the new UID.
+    #[test]
+    fn cow_1064_e2e_settings_yield_expected_uid() {
+        let settings = Settings {
+            oracle_address: "0x694AA1769357215DE4FAC081bf1f309aDC325306"
+                .parse()
+                .unwrap(),
+            trigger_price_scaled: I256::try_from(200_000_000_000_i128).unwrap(),
+            owner: "0x7bF140727D27ea64b607E042f1225680B40ECa6A"
+                .parse()
+                .unwrap(),
+            sell_token: "0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14"
+                .parse()
+                .unwrap(),
+            buy_token: "0x0625aFB445C3B6B7B929342a04A22599fd5dBB59"
+                .parse()
+                .unwrap(),
+            sell_amount: U256::from(5_000_000_000_000_000_u128),
+            buy_amount: U256::from(20_000_000_000_000_000_000_u128),
+            valid_to: u32::MAX,
+        };
+        assert_eq!(
+            programmed_uid(&settings),
+            "0xc2b9cb4ea1ee5a86d8049ac09d8f494bf04cca0a68407285f31e2e6379800be87bf140727d27ea64b607e042f1225680b40eca6affffffff",
+        );
+    }
+
     #[test]
     fn idle_when_price_above_trigger() {
         let host = MockHost::new();

@@ -35,12 +35,55 @@ async fn main() -> anyhow::Result<()> {
     let env_filter = EnvFilter::try_from_default_env()
         .or_else(|_| EnvFilter::try_new(&engine_cfg.engine.log_level))
         .unwrap_or_else(|_| EnvFilter::new("info"));
-    tracing_subscriber::fmt()
-        .with_env_filter(env_filter)
-        .with_target(true)
-        .init();
+    // COW-1035 structured logging: JSON by default (machine-readable
+    // for production; one `jq` query reconstructs any dispatch
+    // timeline); `--pretty-logs` opts back into the 0.1 human-readable
+    // formatter for local dev. The same `EnvFilter` applies to both
+    // so `RUST_LOG=debug` works identically.
+    if cli.pretty_logs {
+        tracing_subscriber::fmt()
+            .with_env_filter(env_filter)
+            .with_target(true)
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(env_filter)
+            .with_target(true)
+            .json()
+            .flatten_event(true)
+            .with_current_span(false)
+            .init();
+    }
 
     info!("nexum-engine starting");
+
+    // COW-1034: install the Prometheus exporter. When
+    // `[engine.metrics].enabled = true` the HTTP listener also binds
+    // and serves `/metrics`. Otherwise the recorder is still
+    // installed (so `metrics::counter!` etc. call sites stay live)
+    // but no port is opened. This means the same binary can be run
+    // in CI / tests without binding a port and in production with
+    // observability enabled by flipping one config flag.
+    if engine_cfg.engine.metrics.enabled {
+        let addr: std::net::SocketAddr =
+            engine_cfg.engine.metrics.bind_addr.parse().map_err(|e| {
+                anyhow::anyhow!(
+                    "invalid [engine.metrics].bind_addr `{}`: {e}",
+                    engine_cfg.engine.metrics.bind_addr
+                )
+            })?;
+        metrics_exporter_prometheus::PrometheusBuilder::new()
+            .with_http_listener(addr)
+            .install()
+            .map_err(|e| anyhow::anyhow!("install Prometheus exporter on {addr}: {e}"))?;
+        info!(addr = %addr, "metrics exporter listening at /metrics");
+    } else {
+        // Recorder still installed so call sites do not panic; just
+        // discarded into a no-op sink instead of served.
+        metrics_exporter_prometheus::PrometheusBuilder::new()
+            .install_recorder()
+            .map_err(|e| anyhow::anyhow!("install Prometheus recorder: {e}"))?;
+    }
 
     // Bring up shared host backends.
     std::fs::create_dir_all(&engine_cfg.engine.state_dir).map_err(|e| {
@@ -52,7 +95,7 @@ async fn main() -> anyhow::Result<()> {
     let store_path = engine_cfg.engine.state_dir.join("local-store.redb");
     let local_store = host::local_store_redb::LocalStore::open(&store_path)
         .map_err(|e| anyhow::anyhow!("open local-store at {}: {e}", store_path.display()))?;
-    let cow_pool = host::cow_orderbook::OrderBookPool::default();
+    let cow_pool = host::cow_orderbook::OrderBookPool::from_config(&engine_cfg);
     let provider_pool = host::provider_pool::ProviderPool::from_config(&engine_cfg).await?;
 
     // wasmtime engine + linker - one of each, shared across modules.
@@ -117,9 +160,15 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let block_streams =
-        runtime::event_loop::open_block_streams(&provider_pool, &block_chains).await;
-    let log_streams = runtime::event_loop::open_log_streams(&provider_pool, log_subs).await;
+    let mut reconnect_tasks = tokio::task::JoinSet::new();
+    let block_streams = runtime::event_loop::open_block_streams(
+        &provider_pool,
+        &block_chains,
+        &mut reconnect_tasks,
+    )
+    .await;
+    let log_streams =
+        runtime::event_loop::open_log_streams(&provider_pool, log_subs, &mut reconnect_tasks).await;
 
     let shutdown = async {
         match runtime::event_loop::wait_for_shutdown_signal().await {
@@ -128,7 +177,14 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    runtime::event_loop::run(&mut supervisor, block_streams, log_streams, shutdown).await;
+    runtime::event_loop::run(
+        &mut supervisor,
+        block_streams,
+        log_streams,
+        reconnect_tasks,
+        shutdown,
+    )
+    .await;
     info!("done");
     Ok(())
 }

@@ -30,6 +30,20 @@ pub struct OrderBookPool {
     http: reqwest::Client,
 }
 
+/// Canonical CoW Protocol chain set the engine ships clients for.
+///
+/// Both `Default::default()` and `OrderBookPool::from_config` walk
+/// this single source of truth so a new chain joining CoW protocol
+/// only needs a one-line addition here instead of two parallel
+/// arrays.
+const DEFAULT_CHAINS: &[Chain] = &[
+    Chain::Mainnet,
+    Chain::Gnosis,
+    Chain::Sepolia,
+    Chain::ArbitrumOne,
+    Chain::Base,
+];
+
 impl Default for OrderBookPool {
     /// Build a pool covering every `cowprotocol::Chain` variant. Each entry
     /// uses the canonical `api.cow.fi/{slug}/api/v1` base URL from the SDK.
@@ -40,14 +54,7 @@ impl Default for OrderBookPool {
             .timeout(Duration::from_secs(30))
             .build()
             .expect("reqwest client builder");
-        let chains = [
-            Chain::Mainnet,
-            Chain::Gnosis,
-            Chain::Sepolia,
-            Chain::ArbitrumOne,
-            Chain::Base,
-        ];
-        let clients = chains
+        let clients = DEFAULT_CHAINS
             .iter()
             .map(|c| (c.id(), OrderBookApi::new(*c)))
             .collect();
@@ -56,6 +63,36 @@ impl Default for OrderBookPool {
 }
 
 impl OrderBookPool {
+    /// Build a pool from engine config, honouring any
+    /// `[chains.<id>] orderbook_url = "..."` overrides. Chains
+    /// without an override fall back to the canonical
+    /// `cowprotocol::Chain` URLs (same as [`OrderBookPool::default`]).
+    ///
+    /// Used by the load test (COW-1079) to point all submissions at
+    /// `tools/orderbook-mock`, and by staging/barn deployments that
+    /// run against a non-production orderbook.
+    pub fn from_config(cfg: &crate::engine_config::EngineConfig) -> Self {
+        let http = reqwest::Client::new();
+        let mut clients: BTreeMap<u64, OrderBookApi> = DEFAULT_CHAINS
+            .iter()
+            .map(|c| (c.id(), OrderBookApi::new(*c)))
+            .collect();
+        for (chain_id, chain_cfg) in &cfg.chains {
+            if let Some(url) = chain_cfg.orderbook_url.as_deref() {
+                match url.parse::<url::Url>() {
+                    Ok(parsed) => {
+                        tracing::info!(chain_id, url, "cow-api: orderbook URL override");
+                        clients.insert(*chain_id, OrderBookApi::new_with_base_url(parsed));
+                    }
+                    Err(e) => {
+                        tracing::warn!(chain_id, url, error = %e, "cow-api: bad orderbook_url, falling back to canonical");
+                    }
+                }
+            }
+        }
+        Self { clients, http }
+    }
+
     /// Look up the client for a chain.
     pub fn get(&self, chain_id: u64) -> Result<&OrderBookApi, CowApiError> {
         self.clients
