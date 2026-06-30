@@ -98,12 +98,7 @@ macro_rules! bind_host_via_wit_bindgen {
                 path: &str,
                 body: ::core::option::Option<&str>,
             ) -> ::core::result::Result<::std::string::String, $crate::host::HostError> {
-<<<<<<< HEAD
                 shepherd::cow::cow_api::request(chain_id, method, path, body).map_err(convert_err)
-=======
-                shepherd::cow::cow_api::request(chain_id, method, path, body)
-                    .map_err(convert_err)
->>>>>>> 0a0e7b4 (feat(sdk + twap-monitor): resolve non-empty app_data via orderbook lookup (COW-1074))
             }
         }
 
