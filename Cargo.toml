@@ -10,6 +10,106 @@ edition = "2024"
 license = "AGPL-3.0"
 repository = "https://github.com/nullisLabs/shepherd"
 
+# Shared dependency table. Only deps consumed by 2+ crates across the
+# full workspace (nexum-engine + every downstream module crate) are
+# hoisted here; single-consumer deps stay per-crate. Crates inherit
+# with `dep.workspace = true` and may add features per call site via
+# `dep = { workspace = true, features = ["extra"] }`. Version drift
+# across crates (the failure mode that prompted hoisting in the first
+# place, e.g. cowprotocol on `1.0.0-alpha` vs `1.0.0-alpha.3`) is now
+# impossible by construction.
+[workspace.dependencies]
+# Error + async plumbing.
+anyhow = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+
+# Serde + config.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Observability.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "ansi", "json"] }
+
+# `strum::IntoStaticStr` on every error / event enum gives a free
+# snake_case `&'static str` for every variant, which feeds directly
+# into `metrics::counter!(..., "error_kind" => name)` and
+# `tracing::warn!(error_kind = name, ...)` recordings without an
+# ad-hoc `match err { ... => "connect" ... }` ladder per call site.
+strum = { version = "0.26", features = ["derive"] }
+
+# `auto_impl::auto_impl(&, Arc, Box)` forwarding impls for traits
+# held through smart pointers. Available workspace-wide so any future
+# `Arc<dyn Trait>` boundary can opt in without touching root manifest.
+auto_impl = "1"
+
+# `derive_more` newtype boilerplate (`Deref`, `From`, `Display`, ...).
+# `default-features = false, features = ["full"]` keeps the proc-macro
+# surface predictable; per-derive opt-in via the standard `#[derive(...)]`
+# syntax. Available workspace-wide; not pulled in by default.
+derive_more = { version = "1", default-features = false, features = ["full"] }
+
+# CLI parser. Used by every binary crate (engine, load-gen,
+# orderbook-mock, shepherd-backtest) via the derive macro.
+clap = { version = "4", features = ["derive"] }
+
+# alloy stack. Engine uses the full provider/transport surface;
+# guest-facing crates use `alloy-primitives` + `alloy-sol-types` for
+# typed protocol values. Pinned together so a single workspace bump
+# moves every consumer at once.
+alloy-primitives = { version = "1.6", default-features = false, features = ["std", "serde"] }
+alloy-sol-types = { version = "1.6", default-features = false, features = ["std"] }
+alloy-provider = { version = "1.8", default-features = false, features = ["ws", "ipc", "pubsub", "reqwest"] }
+alloy-rpc-types-eth = { version = "1.8", default-features = false, features = ["std"] }
+alloy-transport-ws = { version = "1.8", default-features = false }
+
+# CoW Protocol bindings. Pinned to one version across the workspace
+# (was `1.0.0-alpha` in engine vs `1.0.0-alpha.3` in SDK before
+# hoisting). Default features stay on so the engine picks up
+# `http-client` for `OrderBookApi`; guest-side consumers (SDK,
+# strategies) opt out with `default-features = false` for the
+# `cdylib` wasm-target builds.
+cowprotocol = "1.0.0-alpha.3"
+
+# HTTP transport for `cow_api::request` REST passthrough and the
+# orderbook-mock test surface.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# `wit-bindgen` is consumed by every guest module crate (example +
+# every strategy + every fixture). Hoisted so a single bump moves
+# them in lock-step.
+wit-bindgen = { version = "0.58", default-features = false, features = ["macros", "realloc"] }
+
+# Workspace-standard lint set. New crates inherit via
+# `[lints] workspace = true` in their package manifest. `unsafe_code`
+# cannot be denied workspace-wide because every wit-bindgen guest
+# module emits an `unsafe extern "C"` shim; modules carrying that
+# macro keep the default-warn allowance, and unsafe in non-binding
+# code still trips review by convention.
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+
+[workspace.lints.clippy]
+# Deny the easy footguns. Each crate carries its own narrower
+# `#![deny(...)]` where the cost of a violation is high (e.g. the
+# binary entrypoints carry `unused_crate_dependencies` warn).
+dbg_macro = "deny"
+todo = "deny"
+
+# `cowprotocol` v1.0.0-alpha.3 (the crates.io release the engine
+# depends on) was cut from `cowdao-grants/cow-rs` PR #5 at commit
+# `1742ffa`. `bleu/cow-rs` main has 18 commits since, including the
+# `composable::Proof` width fix (relevant to the TWAP poll path),
+# `OrderCreation` zero-from-address fast-fail (closes a MEDIUM
+# review finding from PR #5), and the `order_book` / `composable`
+# submodule splits. Patching to that commit picks them up without
+# waiting for an alpha.4 publish. Drop once `cowprotocol >= 1.0.0-alpha.4`
+# ships.
+[patch.crates-io]
+cowprotocol = { git = "https://github.com/bleu/cow-rs", rev = "c012404ffefc411bff543d2290e19ba7fbef2516" }
+
 [profile.dev]
 panic = "abort"
 

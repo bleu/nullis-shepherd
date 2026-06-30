@@ -80,7 +80,7 @@ A bundle is a **directory** with a fixed layout:
 
 ```
 twap-monitor/
-├── nexum.toml             # manifest
+├── module.toml            # manifest
 └── module.wasm            # compiled component (matches component hash)
 ```
 

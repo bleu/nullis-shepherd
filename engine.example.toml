@@ -1,0 +1,41 @@
+# Engine-side runtime configuration for `nexum-engine`.
+#
+# Distinct from `nexum.toml` (per-module manifest): this file
+# describes the *engine*'s I/O wiring. Copy to `engine.toml` next to
+# the binary, or pass the path as the third positional argument.
+
+[engine]
+# Directory the local-store redb file (and future engine artefacts)
+# will be created under. Created automatically at boot.
+state_dir = "./data"
+
+# `tracing_subscriber::EnvFilter`-compatible directive. `RUST_LOG`
+# overrides at process start.
+log_level = "info"
+
+# Per-module wasmtime resource limits. Both fields are optional;
+# omitted values resolve to built-in defaults (1B fuel, 64 MiB memory).
+# Per-module overrides land in 0.3.
+[limits]
+# fuel_per_event = 1_000_000_000
+# memory_bytes   = 67_108_864
+
+# One [chains.<id>] table per chain the engine should be able to talk
+# to. Chain ids are EVM decimal. `ws://` and `wss://` URLs engage
+# alloy's pubsub transport (needed for `eth_subscribe`); `http://` and
+# `https://` use the HTTP transport.
+
+[chains.1]
+rpc_url = "https://ethereum-rpc.publicnode.com"
+
+[chains.100]
+rpc_url = "https://rpc.gnosischain.com"
+
+[chains.11155111]
+rpc_url = "wss://ethereum-sepolia-rpc.publicnode.com"
+
+[chains.42161]
+rpc_url = "https://arb1.arbitrum.io/rpc"
+
+[chains.8453]
+rpc_url = "https://mainnet.base.org"

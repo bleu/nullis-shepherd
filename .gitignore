@@ -21,3 +21,11 @@ Thumbs.db
 # Environment
 .env
 .env.*
+
+# Agent skills / AI tooling — installed locally, never committed.
+.agents/
+.claude/
+skills-lock.json
+
+# Engine runtime state (default state_dir from engine.toml).
+data/
