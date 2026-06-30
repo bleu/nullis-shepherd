@@ -256,6 +256,7 @@ mod tests {
             chain_id,
             ChainConfig {
                 rpc_url: rpc_url.to_owned(),
+                orderbook_url: None,
             },
         );
         EngineConfig {
