@@ -55,9 +55,33 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - run: cargo test --workspace --all-features --no-fail-fast
 
-  build-module:
-    name: build example module
+  docs:
+    name: rustdoc
     runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: "-D warnings"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master 2026-03-27
+        with:
+          toolchain: nightly
+          targets: wasm32-wasip2
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - run: cargo doc --workspace --no-deps
+
+  build-module:
+    name: build ${{ matrix.module }} (wasm32-wasip2)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - example
+          - twap-monitor
+          - ethflow-watcher
+          - price-alert
+          - balance-tracker
+          - stop-loss
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master 2026-03-27
@@ -65,4 +89,12 @@ jobs:
           toolchain: nightly
           targets: wasm32-wasip2
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-      - run: cargo build -p example --target wasm32-wasip2 --release
+      - run: cargo build -p ${{ matrix.module }} --target wasm32-wasip2 --release
+      - name: report wasm size
+        run: |
+          artifact_name=$(echo "${{ matrix.module }}" | tr '-' '_')
+          wasm_path="target/wasm32-wasip2/release/${artifact_name}.wasm"
+          if [ -f "$wasm_path" ]; then
+            size=$(wc -c < "$wasm_path")
+            echo "${{ matrix.module }} .wasm size: ${size} bytes"
+          fi
