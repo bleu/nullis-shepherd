@@ -26,10 +26,10 @@ max_state_bytes = 52_428_800    # 50 MB
 [module.restart]
 max_consecutive_failures = 10   # Dead after this many consecutive failures
 
-# Chain requirements — the runtime provides RPC for these
-[chains]
-required = [42161]               # Arbitrum (must have)
-optional = [1, 100]              # Mainnet, Gnosis (used if available)
+# Chain requirements are declared per-subscription (see [[subscription]]
+# blocks below). Each subscription specifies its chain_id; the runtime
+# validates that an RPC entry exists in engine.toml for every referenced
+# chain before loading the module.
 
 # Capability negotiation (new in 0.2) — which host primitives the module needs.
 # Optional imports trap with host-error { kind: unsupported } on call rather
@@ -52,7 +52,7 @@ chain_id = 42161
 kind = "log"
 chain_id = 42161
 address = "0xfdaFc9d1902f4e0b84f65F49f244b32b31013b74"
-topics = ["0x…"]                 # ComposableCoW ConditionalOrderCreated
+event_signature = "0x2cceac55…"  # keccak256("ConditionalOrderCreated(...)")
 
 [[subscription]]
 kind = "cron"
@@ -69,9 +69,9 @@ Key design points:
 
 - **`component` is a content hash**, not a filename. The runtime resolves it via the content store (see below). (Was `wasm = ...` in 0.1 — see the migration guide.)
 - **`[[subscription]]` blocks are declarative.** The module doesn't set up its own subscriptions imperatively — the runtime reads the manifest and wires up event sources before calling `init`. The 0.1 spelling was `[[subscribe]]` with `type = ...`; 0.2 uses `[[subscription]]` with `kind = ...` because `type` is a reserved word in several binding languages.
-- **`[capabilities]`** is new in 0.2 and now drives what the runtime links into the module's import space. See the migration guide for the full schema (including `[capabilities.http]` allowlists and `[capabilities.identity].methods` subsets).
+- **`[capabilities]`** is new in 0.2 and now drives what the runtime links into the module's import space. See the migration guide for the full schema (including `[capabilities.http]` allowlists).
 - **`resources` are caps**, not requests. The runtime enforces them via wasmtime's `ResourceLimiter` and fuel system.
-- **`chains.required`** — if the runtime doesn't have an RPC endpoint for a required chain, the module fails to load (fast, clear error).
+- **Chain IDs** are declared per-`[[subscription]]`. If the runtime doesn't have an RPC endpoint for a referenced `chain_id`, the module fails to load (fast, clear error).
 - **`config`** is opaque to the runtime. 0.2 keeps 0.1's stringly-typed shape (`list<tuple<string, string>>`); the host flattens TOML scalars (numbers, booleans) to their string form on the way through. A typed `config-value` variant is on the 0.3 roadmap, bundled with the manifest-parser work.
 
 ### Bundle Format
