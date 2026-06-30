@@ -21,7 +21,7 @@
 //!
 //! - [`types`]: the serde `Manifest` shape + `LoadedManifest` the engine
 //!   actually consumes, plus the `KNOWN_CAPABILITIES` registry.
-//! - [`load`]: `module.toml` -> `LoadedManifest`, plus the host/URL
+//! - [`mod@load`]: `module.toml` -> `LoadedManifest`, plus the host/URL
 //!   helpers the `http` backend uses at request time.
 //! - [`capabilities`]: WIT-import vs declared-capabilities cross-check.
 //! - [`error`]: `ParseError`, `CapabilityViolation`.
@@ -31,9 +31,9 @@ mod error;
 mod load;
 mod types;
 
-pub use capabilities::enforce_capabilities;
-pub use load::{extract_host, fallback_manifest, host_allowed, load};
-pub use types::{LoadedManifest, Subscription};
+pub(crate) use capabilities::enforce_capabilities;
+pub(crate) use load::{extract_host, fallback_manifest, host_allowed, load};
+pub(crate) use types::{LoadedManifest, Subscription};
 // CapabilityViolation, ParseError, and the *Section structs are
 // reachable through these functions' return / argument types;
 // consumers that need to name them directly do so via

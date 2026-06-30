@@ -20,6 +20,7 @@ use alloy_rpc_types_eth::{Filter, Header, Log};
 use futures::stream::Stream;
 use futures::stream::StreamExt as _;
 use serde_json::value::RawValue;
+use strum::IntoStaticStr;
 use thiserror::Error;
 use tracing::info;
 
@@ -157,7 +158,13 @@ pub type BlockStream = Pin<Box<dyn Stream<Item = Result<Header, ProviderError>> 
 pub type LogStream = Pin<Box<dyn Stream<Item = Result<Log, ProviderError>> + Send>>;
 
 /// Errors surfaced by [`ProviderPool`].
-#[derive(Debug, Error)]
+///
+/// `IntoStaticStr` produces the snake_case variant name as
+/// `&'static str` for metric labels and structured-log fields; the
+/// per-variant Display still carries the detail via `thiserror`.
+#[derive(Debug, Error, IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
+#[non_exhaustive]
 pub enum ProviderError {
     /// Chain id absent from the engine config.
     #[error("unknown chain {0} (no engine.toml entry)")]
@@ -229,5 +236,71 @@ mod tests {
         let bad = "not json at all {{{";
         let result = RawValue::from_string(bad.to_owned());
         assert!(result.is_err(), "invalid JSON should fail RawValue parse");
+    }
+
+    /// Helper: build an `EngineConfig` with a single HTTP chain entry.
+    fn test_config(chain_id: u64, rpc_url: &str) -> EngineConfig {
+        use crate::engine_config::{ChainConfig, EngineConfig};
+        let mut chains = BTreeMap::new();
+        chains.insert(
+            chain_id,
+            ChainConfig {
+                rpc_url: rpc_url.to_owned(),
+            },
+        );
+        EngineConfig {
+            chains,
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_params_through_request_produces_error() {
+        let cfg = test_config(1, "http://127.0.0.1:1");
+        let pool = ProviderPool::from_config(&cfg).await.unwrap();
+        let err = pool
+            .request(1, "eth_blockNumber".into(), "not json {{{".into())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, ProviderError::InvalidParams { .. }),
+            "expected InvalidParams, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn rpc_error_on_unreachable_node() {
+        let cfg = test_config(1, "http://127.0.0.1:1");
+        let pool = ProviderPool::from_config(&cfg).await.unwrap();
+        let err = pool
+            .request(1, "eth_blockNumber".into(), "[]".into())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, ProviderError::Rpc { .. }),
+            "expected Rpc error, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn rpc_error_on_malformed_node_response() {
+        use wiremock::{Mock, MockServer, ResponseTemplate, matchers::any};
+
+        let server = MockServer::start().await;
+        Mock::given(any())
+            .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
+            .mount(&server)
+            .await;
+
+        let cfg = test_config(1, &server.uri());
+        let pool = ProviderPool::from_config(&cfg).await.unwrap();
+        let err = pool
+            .request(1, "eth_blockNumber".into(), "[]".into())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, ProviderError::Rpc { .. }),
+            "expected Rpc error from malformed response, got: {err:?}"
+        );
     }
 }
