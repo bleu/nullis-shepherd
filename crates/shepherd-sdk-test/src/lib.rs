@@ -198,9 +198,16 @@ impl ChainHost for MockChain {
 /// In-memory [`LocalStoreHost`] backed by a `HashMap`. Each operation
 /// runs in O(1) except `list_keys`, which scans (small N expected for
 /// tests).
+///
+/// Supports optional error injection via [`MockLocalStore::fail_on`]
+/// and entry-count limits via [`MockLocalStore::set_max_entries`].
 #[derive(Default)]
 pub struct MockLocalStore {
     rows: RefCell<HashMap<String, Vec<u8>>>,
+    /// When set, `set` returns `StorageFull` if the store reaches this many entries.
+    max_entries: RefCell<Option<usize>>,
+    /// Key patterns that trigger injected errors on any operation.
+    error_patterns: RefCell<Vec<(String, HostError)>>,
 }
 
 impl MockLocalStore {
@@ -218,23 +225,63 @@ impl MockLocalStore {
     pub fn snapshot(&self) -> HashMap<String, Vec<u8>> {
         self.rows.borrow().clone()
     }
+
+    /// Set a maximum number of entries. Once reached, `set` on a new
+    /// key returns a `StorageFull` error. `None` disables the limit.
+    pub fn set_max_entries(&self, limit: usize) {
+        *self.max_entries.borrow_mut() = Some(limit);
+    }
+
+    /// Inject an error for any operation where the key starts with
+    /// `prefix`. Multiple patterns can be registered; the first
+    /// matching one fires.
+    pub fn fail_on(&self, prefix: impl Into<String>, error: HostError) {
+        self.error_patterns
+            .borrow_mut()
+            .push((prefix.into(), error));
+    }
+
+    fn check_injected_error(&self, key: &str) -> Result<(), HostError> {
+        for (pattern, error) in self.error_patterns.borrow().iter() {
+            if key.starts_with(pattern) {
+                return Err(error.clone());
+            }
+        }
+        Ok(())
+    }
 }
 
 impl LocalStoreHost for MockLocalStore {
     fn get(&self, key: &str) -> Result<Option<Vec<u8>>, HostError> {
+        self.check_injected_error(key)?;
         Ok(self.rows.borrow().get(key).cloned())
     }
     fn set(&self, key: &str, value: &[u8]) -> Result<(), HostError> {
+        self.check_injected_error(key)?;
+        if let Some(limit) = *self.max_entries.borrow() {
+            let rows = self.rows.borrow();
+            if rows.len() >= limit && !rows.contains_key(key) {
+                return Err(HostError {
+                    domain: "local-store".into(),
+                    kind: HostErrorKind::Internal,
+                    code: 0,
+                    message: format!("MockLocalStore: max entries ({limit}) reached"),
+                    data: None,
+                });
+            }
+        }
         self.rows
             .borrow_mut()
             .insert(key.to_string(), value.to_vec());
         Ok(())
     }
     fn delete(&self, key: &str) -> Result<(), HostError> {
+        self.check_injected_error(key)?;
         self.rows.borrow_mut().remove(key);
         Ok(())
     }
     fn list_keys(&self, prefix: &str) -> Result<Vec<String>, HostError> {
+        self.check_injected_error(prefix)?;
         let mut keys: Vec<String> = self
             .rows
             .borrow()
@@ -438,6 +485,43 @@ mod tests {
         assert_eq!(log.count_at(LogLevel::Info), 2);
         assert_eq!(log.count_at(LogLevel::Warn), 1);
         assert!(log.contains("uh oh"));
+    }
+
+    #[test]
+    fn local_store_error_injection() {
+        let store = MockLocalStore::default();
+        store.fail_on(
+            "bad:",
+            HostError {
+                domain: "local-store".into(),
+                kind: HostErrorKind::Internal,
+                code: 0,
+                message: "injected".into(),
+                data: None,
+            },
+        );
+        // Non-matching keys work fine.
+        store.set("good:k", b"v").unwrap();
+        assert_eq!(store.get("good:k").unwrap().as_deref(), Some(&b"v"[..]));
+        // Matching keys trigger the error.
+        assert!(store.set("bad:k", b"v").is_err());
+        assert!(store.get("bad:k").is_err());
+        assert!(store.delete("bad:k").is_err());
+        assert!(store.list_keys("bad:").is_err());
+    }
+
+    #[test]
+    fn local_store_max_entries_enforced() {
+        let store = MockLocalStore::default();
+        store.set_max_entries(2);
+        store.set("a", b"1").unwrap();
+        store.set("b", b"2").unwrap();
+        // Updating an existing key is OK even at the limit.
+        store.set("b", b"3").unwrap();
+        // Adding a new key exceeds the limit.
+        let err = store.set("c", b"4").unwrap_err();
+        assert!(err.message.contains("max entries"));
+        assert_eq!(store.len(), 2);
     }
 
     #[test]
