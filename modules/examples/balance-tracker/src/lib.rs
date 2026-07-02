@@ -67,8 +67,7 @@ impl Guest for BalanceTracker {
             return Ok(());
         };
         if let types::Event::Block(block) = event {
-            strategy::on_block(&WitBindgenHost, block.chain_id, cfg)
-                .map_err(sdk_err_into_wit)?;
+            strategy::on_block(&WitBindgenHost, block.chain_id, cfg).map_err(sdk_err_into_wit)?;
         }
         Ok(())
     }

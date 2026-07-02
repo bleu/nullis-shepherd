@@ -60,17 +60,17 @@ fn check_one<H: Host>(
     let key = balance_key(&addr);
     let prior = host.get(&key)?.and_then(|b| parse_u256_le(&b));
 
-    if let Some(prior) = prior {
-        if abs_diff(current, prior) >= threshold {
-            let direction = if current > prior { "+" } else { "-" };
-            host.log(
-                LogLevel::Warn,
-                &format!(
-                    "balance-tracker {addr:#x} changed {direction}{} wei (prior={prior}, current={current})",
-                    abs_diff(current, prior),
-                ),
-            );
-        }
+    if let Some(prior) = prior
+        && abs_diff(current, prior) >= threshold
+    {
+        let direction = if current > prior { "+" } else { "-" };
+        host.log(
+            LogLevel::Warn,
+            &format!(
+                "balance-tracker {addr:#x} changed {direction}{} wei (prior={prior}, current={current})",
+                abs_diff(current, prior),
+            ),
+        );
     }
     // Always persist the latest reading so the next event's diff is
     // accurate even when the change was below threshold (or when this
